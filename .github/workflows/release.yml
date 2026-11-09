@@ -1,7 +1,5 @@
 name: Prepare and publish release
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       source_ref:

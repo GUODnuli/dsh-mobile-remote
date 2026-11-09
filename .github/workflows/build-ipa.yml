@@ -60,8 +60,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create v3.2.4-duo dsh-mobile-app/build/ipa/DSH-Remote-Duo.ipa \
-            --title "DSH Remote v3.2.4 (iPhone Duo 折叠屏适配版)" \
-            --notes "针对 iPhone Duo 外屏（紧凑 Hero + 右侧 84pt 导航栏）与展开内屏（全屏铺满 + 横屏 iPad mini 左右主从双栏 + 竖屏 Chatbot 侧栏）专项适配的 iOS 安装包（未签名 IPA，可用 Sideloadly / AltStore / SideStore / 爱思助手 / 巨魔签名安装）。" \
-            --clobber || \
-          gh release upload v3.2.4-duo dsh-mobile-app/build/ipa/DSH-Remote-Duo.ipa --clobber
+          if gh release view v3.2.4-duo >/dev/null 2>&1; then
+            gh release upload v3.2.4-duo dsh-mobile-app/build/ipa/DSH-Remote-Duo.ipa --clobber
+          else
+            gh release create v3.2.4-duo dsh-mobile-app/build/ipa/DSH-Remote-Duo.ipa \
+              --title "DSH Remote v3.2.4 (iPhone Duo 折叠屏适配版)" \
+              --notes "针对 iPhone Duo 外屏（紧凑 Hero + 右侧 84pt 导航栏）与展开内屏（全屏铺满 + 横屏 iPad mini 左右主从双栏 + 竖屏 Chatbot 侧栏）专项适配的 iOS 安装包（未签名 IPA，可用 Sideloadly / AltStore / SideStore / 爱思助手 / 巨魔签名安装）。"
+          fi
