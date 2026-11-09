@@ -1,5 +1,7 @@
 // 首页：欢迎 + 最近会话 + 新建会话
 import 'package:flutter/material.dart';
+import 'dart:math' as math;
+import '../duo_layout.dart';
 import '../l10n.dart';
 import '../toast.dart';
 import '../models.dart';
@@ -98,7 +100,9 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   /// 大肥鱼皮肤的首页 Hero：左边一句问候，右边角色（点她/长按都会回应）。
-  Widget _bigFishHero(BuildContext context) {
+  /// 在 iPhone Duo 外屏 / 矮屏（compact=true）下自动收缩为紧凑横幅（104dp 高），
+  /// 把宝贵的纵向空间留给下方的「最近会话」列表。
+  Widget _bigFishHero(BuildContext context, {bool compact = false}) {
     final en = L10n.lang == 'en';
     final skin = DshColors.skin(context);
     final (String kicker, String title, String sub) = switch (skin) {
@@ -123,6 +127,75 @@ class _HomeScreenState extends State<HomeScreen>
           '',
         ),
     };
+    if (compact) {
+      return SizedBox(
+        height: 104,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              left: 2,
+              top: 2,
+              right: 108,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    kicker,
+                    style: TextStyle(
+                      fontSize: 8.5,
+                      letterSpacing: 1.4,
+                      fontWeight: FontWeight.w700,
+                      color: DshColors.accent(context),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 19,
+                      height: 1.15,
+                      fontWeight: FontWeight.w700,
+                      color: DshColors.ink(context),
+                    ),
+                  ),
+                  if (sub.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      sub,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        height: 1.35,
+                        color: DshColors.ink2(context),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 4),
+                  Text(
+                    L10n.t('点她互动 · 长按开面板', 'Tap or long-press the pet'),
+                    style: TextStyle(fontSize: 9.5, color: DshColors.ink3(context)),
+                  ),
+                ],
+              ),
+            ),
+            Positioned(
+              right: -4,
+              bottom: 0,
+              child: HomePet(
+                store: widget.store,
+                height: 88,
+                onLongPress: () => _openPetPanel(context),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     return SizedBox(
       height: 224,
       child: Stack(
@@ -298,134 +371,260 @@ class _HomeScreenState extends State<HomeScreen>
               }
             },
             child: LayoutBuilder(
-              builder: (context, constraints) => SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                // 内容不满一屏时整体垂直居中（去掉底部输入框后主页不再空底）；
-                // alignment.y=-0.6 让内容块明显偏上（logo 贴近顶部，下半留白）
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                  child: Align(
-                    alignment: bigFish ? const Alignment(0, -0.35) : const Alignment(0, -0.6),
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 24, 16, 24),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          if (bigFish) ...[
-                            _bigFishHero(context),
-                            const SizedBox(height: 18),
-                          ] else ...[
-                            // 官方 logo（DeepSeek 官网 favicon 转 PNG，蓝鲸标志）
-                            Image.asset(
-                              'assets/deepseek-logo.png',
-                              width: 84,
-                              height: 84,
-                            ),
-                            const SizedBox(height: 10),
-                            // 欢迎
-                            Text(
-                              L10n.t('今天打算设计什么？', 'What are you designing today?'),
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                fontSize: 30,
-                                height: 1.35,
-                                fontWeight: FontWeight.w700,
-                                fontFamily: 'Georgia',
-                                color: Theme.of(context).colorScheme.onSurface,
-                              ),
-                            ),
-                            const SizedBox(height: 24),
-                          ],
-                          // 最近会话卡
-                          Container(
-                            decoration: BoxDecoration(
-                              color: DshColors.surface(context),
-                              borderRadius: BorderRadius.circular(DshTheme.radiusMd),
-                              boxShadow: Theme.of(context).brightness == Brightness.dark ? DshTheme.shadowDark : DshTheme.shadow,
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 16),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Padding(
-                                    padding: const EdgeInsets.only(top: 12, bottom: 2),
-                                    child: Text(
-                                      store.workspaceTitle != null ? '${L10n.t('最近会话', 'Recent Sessions')} · ${store.workspaceTitle}' : L10n.t('最近会话', 'Recent Sessions'),
-                                      style: TextStyle(
-                                        fontSize: 11.5,
-                                        fontWeight: FontWeight.w600,
-                                        letterSpacing: 0.5,
-                                        color: ink3,
-                                      ),
+              builder: (context, constraints) {
+                final duoMetrics = DuoAdaptiveScope.metricsOf(context);
+                // iPhone Duo 外屏（高度约 678pt，扣去顶栏后 < 640pt）自动启用紧凑 Hero，
+                // 让「最近会话」列表在首屏完整展现 4~5 条且不遮挡新建按钮。
+                final compactHero =
+                    duoMetrics.isOuterOrShortScreen ||
+                    constraints.maxHeight < 640;
+                final listMaxHeight = compactHero
+                    ? math.max(
+                        180.0,
+                        math.min(280.0, constraints.maxHeight - 220.0),
+                      )
+                    : (duoMetrics.isUnfoldedInner
+                          ? math.max(
+                              220.0,
+                              math.min(360.0, constraints.maxHeight - 310.0),
+                            )
+                          : 176.0);
+                return SingleChildScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  // 内容不满一屏时整体垂直居中（去掉底部输入框后主页不再空底）；
+                  // 外屏紧凑模式下贴顶对齐，避免上下留白挤占会话列表空间。
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      minHeight: constraints.maxHeight,
+                    ),
+                    child: Align(
+                      alignment: compactHero
+                          ? Alignment.topCenter
+                          : (bigFish
+                                ? const Alignment(0, -0.35)
+                                : const Alignment(0, -0.6)),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 600),
+                        child: Padding(
+                          padding: EdgeInsets.fromLTRB(
+                            16,
+                            compactHero ? 10 : 24,
+                            16,
+                            compactHero ? 12 : 24,
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              if (bigFish) ...[
+                                _bigFishHero(context, compact: compactHero),
+                                SizedBox(height: compactHero ? 10 : 18),
+                              ] else if (compactHero) ...[
+                                Row(
+                                  children: [
+                                    Image.asset(
+                                      'assets/deepseek-logo.png',
+                                      width: 44,
+                                      height: 44,
                                     ),
-                                  ),
-                                  if (recent.isEmpty)
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(vertical: 24),
-                                      child: Center(child: Text(L10n.t('暂无会话，点下方新建', 'No sessions yet, create one below'), style: const TextStyle(color: Colors.grey))),
-                                    )
-                                  else
-                                    // 恰好完整显示 3 行（约 3×52+分隔线），第 4 行露边提示可滑动
-                                    ConstrainedBox(
-                                      constraints: const BoxConstraints(maxHeight: 176),
-                                      child: ListView.separated(
-                                        shrinkWrap: true,
-                                        padding: EdgeInsets.zero,
-                                        itemCount: recent.length,
-                                        separatorBuilder: (_, _) => Divider(height: 1, color: line),
-                                        itemBuilder: (context, i) => _SessionRow(
-                                          // 稳定行标识：复用时不跟错会话的状态
-                                          key: ValueKey('home-session-row-${recent[i].id}'),
-                                          session: recent[i],
-                                          workspace: store.workspaceLabelOf(recent[i]),
-                                          state: store.rowStateOf(recent[i].id),
-                                          indicator: reducedMotion ? null : _indicator.animation,
-                                          onTap: () => _openSession(recent[i]),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: Text(
+                                        L10n.t(
+                                          '今天打算设计什么？',
+                                          'What are you designing today?',
+                                        ),
+                                        style: TextStyle(
+                                          fontSize: 20,
+                                          height: 1.25,
+                                          fontWeight: FontWeight.w700,
+                                          fontFamily: 'Georgia',
+                                          color: Theme.of(
+                                            context,
+                                          ).colorScheme.onSurface,
                                         ),
                                       ),
                                     ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          // 新建会话
-                          FilledButton(
-                            style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(46)),
-                            // v3.0.0 review：双击防抖——连点会并行弹出两个新建会话弹层
-                            onPressed: () {
-                              if (_openingSheet) return;
-                              _openingSheet = true;
-                              showNewSessionSheet(context, store, (id) async {
-                                // Phase 2(A4)：openChat 内统一 setSession+refreshSessionConfig+push，这里只刷列表
-                                store.refreshSessions();
-                                if (!context.mounted) return;
-                                await openChat(context, store, id,
-                                    onTitleChanged: widget.onOpenSession);
-                              }).whenComplete(() => _openingSheet = false);
-                            },
-                            child: Text(L10n.t('＋ 新建会话', '+ New Session')),
-                          ),
-                          if (bigFish) ...[
-                            const SizedBox(height: 16),
-                            Center(
-                              child: Text(
-                                L10n.t(
-                                  '点她、戳她，或长按打开面板',
-                                  'Tap, poke, or long-press the pet',
+                                  ],
                                 ),
-                                style: TextStyle(fontSize: 10.5, color: ink3),
+                                const SizedBox(height: 12),
+                              ] else ...[
+                                // 官方 logo（DeepSeek 官网 favicon 转 PNG，蓝鲸标志）
+                                Image.asset(
+                                  'assets/deepseek-logo.png',
+                                  width: 84,
+                                  height: 84,
+                                ),
+                                const SizedBox(height: 10),
+                                // 欢迎
+                                Text(
+                                  L10n.t(
+                                    '今天打算设计什么？',
+                                    'What are you designing today?',
+                                  ),
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    fontSize: 30,
+                                    height: 1.35,
+                                    fontWeight: FontWeight.w700,
+                                    fontFamily: 'Georgia',
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurface,
+                                  ),
+                                ),
+                                const SizedBox(height: 24),
+                              ],
+                              // 最近会话卡
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: DshColors.surface(context),
+                                  borderRadius: BorderRadius.circular(
+                                    DshTheme.radiusMd,
+                                  ),
+                                  boxShadow:
+                                      Theme.of(context).brightness ==
+                                          Brightness.dark
+                                      ? DshTheme.shadowDark
+                                      : DshTheme.shadow,
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          top: 12,
+                                          bottom: 2,
+                                        ),
+                                        child: Text(
+                                          store.workspaceTitle != null
+                                              ? '${L10n.t('最近会话', 'Recent Sessions')} · ${store.workspaceTitle}'
+                                              : L10n.t(
+                                                  '最近会话',
+                                                  'Recent Sessions',
+                                                ),
+                                          style: TextStyle(
+                                            fontSize: 11.5,
+                                            fontWeight: FontWeight.w600,
+                                            letterSpacing: 0.5,
+                                            color: ink3,
+                                          ),
+                                        ),
+                                      ),
+                                      if (recent.isEmpty)
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 24,
+                                          ),
+                                          child: Center(
+                                            child: Text(
+                                              L10n.t(
+                                                '暂无会话，点下方新建',
+                                                'No sessions yet, create one below',
+                                              ),
+                                              style: const TextStyle(
+                                                color: Colors.grey,
+                                              ),
+                                            ),
+                                          ),
+                                        )
+                                      else
+                                        ConstrainedBox(
+                                          constraints: BoxConstraints(
+                                            maxHeight: listMaxHeight,
+                                          ),
+                                          child: ListView.separated(
+                                            shrinkWrap: true,
+                                            padding: EdgeInsets.zero,
+                                            itemCount: recent.length,
+                                            separatorBuilder: (_, _) => Divider(
+                                              height: 1,
+                                              color: line,
+                                            ),
+                                            itemBuilder: (context, i) =>
+                                                _SessionRow(
+                                                  // 稳定行标识：复用时不跟错会话的状态
+                                                  key: ValueKey(
+                                                    'home-session-row-${recent[i].id}',
+                                                  ),
+                                                  session: recent[i],
+                                                  workspace: store
+                                                      .workspaceLabelOf(
+                                                        recent[i],
+                                                      ),
+                                                  state: store.rowStateOf(
+                                                    recent[i].id,
+                                                  ),
+                                                  indicator: reducedMotion
+                                                      ? null
+                                                      : _indicator.animation,
+                                                  onTap: () =>
+                                                      _openSession(recent[i]),
+                                                ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
                               ),
-                            ),
-                          ],
-                        ],
+                              SizedBox(height: compactHero ? 12 : 16),
+                              // 新建会话
+                              FilledButton(
+                                style: FilledButton.styleFrom(
+                                  minimumSize: Size.fromHeight(
+                                    compactHero ? 42 : 46,
+                                  ),
+                                ),
+                                // v3.0.0 review：双击防抖——连点会并行弹出两个新建会话弹层
+                                onPressed: () {
+                                  if (_openingSheet) return;
+                                  _openingSheet = true;
+                                  showNewSessionSheet(context, store, (
+                                    id,
+                                  ) async {
+                                    // Phase 2(A4)：openChat 内统一 setSession+refreshSessionConfig+push，这里只刷列表
+                                    store.refreshSessions();
+                                    if (!context.mounted) return;
+                                    await openChat(
+                                      context,
+                                      store,
+                                      id,
+                                      onTitleChanged: widget.onOpenSession,
+                                    );
+                                  }).whenComplete(() => _openingSheet = false);
+                                },
+                                child: Text(
+                                  L10n.t('＋ 新建会话', '+ New Session'),
+                                ),
+                              ),
+                              if (bigFish && !compactHero) ...[
+                                const SizedBox(height: 16),
+                                Center(
+                                  child: Text(
+                                    L10n.t(
+                                      '点她、戳她，或长按打开面板',
+                                      'Tap, poke, or long-press the pet',
+                                    ),
+                                    style: TextStyle(
+                                      fontSize: 10.5,
+                                      color: ink3,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ),
+                );
+              },
             ),
           ),
         ),

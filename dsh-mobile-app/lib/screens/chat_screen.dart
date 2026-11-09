@@ -12,6 +12,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../toast.dart';
+import '../duo_layout.dart';
 import '../api.dart';
 import '../chat_copy.dart';
 import '../download.dart';
@@ -175,9 +176,15 @@ Future<void> openChat(
   Future<void> Function()? onReturn,
   Api? apiClient,
 }) async {
+  final duoScope = DuoAdaptiveScope.maybeOf(context);
   await store.setSession(sessionId);
   store.refreshSessionConfig();
   if (!context.mounted) return;
+  if (duoScope?.onSelectSessionInline != null && apiClient == null) {
+    duoScope!.onSelectSessionInline!(sessionId);
+    onTitleChanged?.call();
+    return;
+  }
   await Navigator.of(context).push(
     MaterialPageRoute(
       builder: (_) => ChatScreen(
@@ -297,6 +304,8 @@ class ChatScreen extends StatefulWidget {
   final Api? apiClient;
   final GitReadApi? gitReadApi;
   final GitBrowserControllerFactory? gitControllerFactory;
+  final bool embedded;
+  final Widget? leading;
   const ChatScreen({
     super.key,
     required this.store,
@@ -305,6 +314,8 @@ class ChatScreen extends StatefulWidget {
     this.apiClient,
     this.gitReadApi,
     this.gitControllerFactory,
+    this.embedded = false,
+    this.leading,
   });
 
   @override
@@ -3904,14 +3915,21 @@ class _ChatScreenState extends State<ChatScreen> {
     // 条目增删/分页会改变几何：本帧结束后校准"当前轮"。
     // 只在取值变化时 setState，因此会收敛，不会自激。
     WidgetsBinding.instance.addPostFrameCallback((_) => _updateActiveTurn());
+    final duoMetrics = DuoAdaptiveScope.metricsOf(context);
+    final topRightClearance = duoMetrics.isUnfoldedInner
+        ? duoMetrics.topRightCornerBlock.width
+        : 0.0;
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, size: 20),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
+        automaticallyImplyLeading: !widget.embedded,
+        leading: widget.embedded
+            ? widget.leading
+            : IconButton(
+                icon: const Icon(Icons.arrow_back, size: 20),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
         title: Row(
           children: [
             Flexible(
@@ -3939,6 +3957,7 @@ class _ChatScreenState extends State<ChatScreen> {
             tooltip: L10n.t('对话操作', 'Conversation actions'),
             onPressed: _openConversationActionRail,
           ),
+          if (topRightClearance > 0) SizedBox(width: topRightClearance),
         ],
       ),
       body: Column(
@@ -4097,19 +4116,26 @@ class _ChatScreenState extends State<ChatScreen> {
           _buildQueueDock(),
           // composer（v2.8.0 重构为两层，对齐 PC 端 InputBar）：
           // 第一层 = [/命令] + 输入框（独占最宽）；第二层 = 模型/权限/排队胶囊 + 上下文圆环 + 发送
+          // iPhone Duo 展开态下居中约束最大阅读宽度（对齐 iPad mini Chatbot 体验）
           SafeArea(
             top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
-              child: Container(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
-                decoration: BoxDecoration(
-                  color: surface,
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: Theme.of(context).brightness == Brightness.dark
-                      ? DshTheme.shadowDark
-                      : DshTheme.shadow,
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: duoMetrics.isUnfoldedInner ? 720 : double.infinity,
                 ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+                    decoration: BoxDecoration(
+                      color: surface,
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: Theme.of(context).brightness == Brightness.dark
+                          ? DshTheme.shadowDark
+                          : DshTheme.shadow,
+                    ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -4256,9 +4282,11 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ),
-        ],
+        ),
       ),
-    );
+    ],
+  ),
+);
   }
 
   String _fmtUsage(Map<String, dynamic> u) {

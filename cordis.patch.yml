@@ -1,0 +1,22 @@
+# Shipped inside the package (package.json -> dsh.bundle.patch).
+#
+# `dsh plugin --profile <web|desktop> add <this package>` appends the package to the profile's bundle list, and
+# this file becomes one of the profile's patch layers. Nothing has to be written into your own cordis.patch.yml.
+#
+#   authToken: "@auto"       generate a strong access token on first start, keep it in
+#                            ~/.dsh/mobile-remote/auth-token and print it with the address in the DSH log
+#   lanBridge.enabled: auto  open the LAN bridge only when the DSH web server listens on loopback only
+#                            (DSH Desktop); `dsh web` already listens on all interfaces
+#
+# To change anything, override the same entry in your own profile cordis.patch.yml:
+#   - id: mobile-remote
+#     config: { path: /m, authToken: "<your own token>", lanBridge: { enabled: false } }
+# (a patch replaces the whole config object, so repeat the fields you want to keep).
+- insert:
+    - id: mobile-remote
+      name: '@dsh-mobile/mobile-remote'
+      config:
+        path: /m
+        authToken: '@auto'
+        lanBridge:
+          enabled: 'auto'

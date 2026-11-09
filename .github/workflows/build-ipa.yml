@@ -1,0 +1,67 @@
+name: Build iPhone Duo IPA
+
+on:
+  push:
+    branches: [main, ios]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-ipa:
+    name: Build iPhone Duo IPA (macOS)
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.0"
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        working-directory: dsh-mobile-app
+        run: flutter pub get --enforce-lockfile
+
+      - name: Flutter analyze
+        working-directory: dsh-mobile-app
+        run: flutter analyze --no-pub
+
+      - name: Run iPhone Duo & Home layout tests
+        working-directory: dsh-mobile-app
+        run: flutter test --no-pub test/duo_layout_test.dart test/skin_home_test.dart
+
+      - name: Build iOS Release (no codesign)
+        working-directory: dsh-mobile-app
+        run: flutter build ios --release --no-codesign
+
+      - name: Package Runner.app into DSH-Remote-Duo.ipa
+        working-directory: dsh-mobile-app
+        run: |
+          mkdir -p build/ipa/Payload
+          cp -R build/ios/iphoneos/Runner.app build/ipa/Payload/Runner.app
+          cd build/ipa
+          ditto -c -k --sequesterRsrc --keepParent Payload DSH-Remote-Duo.ipa
+          ls -lh DSH-Remote-Duo.ipa
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DSH-Remote-Duo-IPA
+          path: dsh-mobile-app/build/ipa/DSH-Remote-Duo.ipa
+          retention-days: 30
+
+      - name: Publish to GitHub Release (v3.2.4-duo)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create v3.2.4-duo dsh-mobile-app/build/ipa/DSH-Remote-Duo.ipa \
+            --title "DSH Remote v3.2.4 (iPhone Duo 折叠屏适配版)" \
+            --notes "针对 iPhone Duo 外屏（紧凑 Hero + 右侧 84pt 导航栏）与展开内屏（全屏铺满 + 横屏 iPad mini 左右主从双栏 + 竖屏 Chatbot 侧栏）专项适配的 iOS 安装包（未签名 IPA，可用 Sideloadly / AltStore / SideStore / 爱思助手 / 巨魔签名安装）。" \
+            --clobber || \
+          gh release upload v3.2.4-duo dsh-mobile-app/build/ipa/DSH-Remote-Duo.ipa --clobber

@@ -180,8 +180,8 @@ class LocalNotifier {
   Future<void> init() => _initializing ??= _initialize();
 
   Future<void> _initialize() async {
-    if (!Platform.isAndroid) {
-      AppLog.instance.log('通知：非 Android 平台，跳过本地通知');
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      AppLog.instance.log('通知：非移动端平台，跳过本地通知');
       return;
     }
     if (_ready) return;
@@ -189,6 +189,11 @@ class LocalNotifier {
       await _plugin.initialize(
         settings: const InitializationSettings(
           android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+          iOS: DarwinInitializationSettings(
+            requestAlertPermission: true,
+            requestBadgePermission: true,
+            requestSoundPermission: true,
+          ),
         ),
         onDidReceiveNotificationResponse: (response) {
           if (_isUpdatePayload(response.payload)) {
@@ -202,21 +207,21 @@ class LocalNotifier {
           }
         },
       );
-      final android = _plugin
-          .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin
-          >();
-      await android?.createNotificationChannel(
-        const AndroidNotificationChannel(
-          _channelId,
-          _channelName,
-          description: '审批与提问提醒（App 在线时）',
-          importance: Importance.high,
-        ),
-      );
-      _android = android;
-      // Android 13+ 需要运行时权限；用户拒绝时保持 ready=false，静默退化为 App 内提醒，
-      // 但**必须留日志**——否则现场只能看到"没弹"，不知道是没权限还是别的原因。
+      if (Platform.isAndroid) {
+        final android = _plugin
+            .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin
+            >();
+        await android?.createNotificationChannel(
+          const AndroidNotificationChannel(
+            _channelId,
+            _channelName,
+            description: '审批与提问提醒（App 在线时）',
+            importance: Importance.high,
+          ),
+        );
+        _android = android;
+      }
       _ready = await ensurePermission();
       AppLog.instance.log('通知：初始化完成（ready=$_ready）');
       // 冷启动由通知点开：此时 main.dart 还没挂 onOpenSession，先暂存，等它来取。
@@ -246,6 +251,20 @@ class LocalNotifier {
   /// Read current permission and channel state without prompting from the background.
   Future<({bool permission, bool channel})> availability() async {
     await init();
+    if (Platform.isIOS) {
+      final ios = _plugin
+          .resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin
+          >();
+      if (ios == null) return (permission: false, channel: false);
+      try {
+        final perms = await ios.checkPermissions();
+        _ready = perms?.isEnabled ?? false;
+        return (permission: _ready, channel: true);
+      } catch (_) {
+        return (permission: false, channel: false);
+      }
+    }
     final android = _android;
     if (android == null) return (permission: false, channel: false);
     try {
@@ -296,6 +315,31 @@ class LocalNotifier {
   /// 关键点：`requestNotificationsPermission()` 只在第一次有效，之后系统不再弹窗。
   /// 所以每次先查 `areNotificationsEnabled()`——用户在系统设置里手动开启后，无需重启 App。
   Future<bool> ensurePermission() async {
+    if (Platform.isIOS) {
+      final ios = _plugin
+          .resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin
+          >();
+      if (ios == null) return _ready;
+      try {
+        final perms = await ios.checkPermissions();
+        var enabled = perms?.isEnabled ?? false;
+        if (!enabled) {
+          enabled =
+              await ios.requestPermissions(
+                alert: true,
+                badge: true,
+                sound: true,
+              ) ??
+              false;
+        }
+        AppLog.instance.log('通知(iOS)：权限检查 → $enabled');
+        return enabled;
+      } catch (e) {
+        AppLog.instance.log('通知(iOS)：权限检查失败（$e）');
+        return false;
+      }
+    }
     final android = _android;
     if (android == null) return _ready;
     try {
@@ -356,6 +400,11 @@ class LocalNotifier {
             category: AndroidNotificationCategory.message,
             onlyAlertOnce: true,
           ),
+          iOS: DarwinNotificationDetails(
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+          ),
         ),
         payload: jsonEncode({
           's': sessionId,
@@ -377,7 +426,7 @@ class LocalNotifier {
 
   /// 撤销一条系统通知（按 id 精确撤，**不要**用 cancelAll）。
   Future<void> cancel(int id) async {
-    if (_android == null) return;
+    if (_android == null && !Platform.isIOS) return;
     try {
       await _plugin.cancel(id: id);
       AppLog.instance.log('通知：已撤销 id=$id');

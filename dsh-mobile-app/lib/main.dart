@@ -10,6 +10,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'l10n.dart';
+import 'duo_layout.dart';
 import 'api.dart';
 import 'app_icon_switcher.dart';
 import 'store.dart';
@@ -656,6 +657,15 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
   bool _reconfiguring = false; // 重新配置进行中：显示连接页但保留旧配置，取消可回退
   final _drawerKey = GlobalKey<ScaffoldState>();
 
+  /// iPhone Duo 展开内屏横屏（左右双栏）右侧面板模式：0=当前对话，1=首页概览，2=设置
+  int _splitRightMode = 0;
+
+  /// iPhone Duo 展开内屏竖屏（iPad mini Chatbot 模式）主视图：0=对话，1=首页，2=会话列表，3=设置
+  int _portraitTab = 0;
+
+  /// iPhone Duo 展开内屏竖屏下是否展开左侧会话侧栏
+  bool _portraitSessionPanelOpen = false;
+
   @override
   void initState() {
     super.initState();
@@ -763,33 +773,117 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
       // Phase 2(A4)：openChat 内统一 setSession+refreshSessionConfig+push，这里只刷列表
       store.refreshSessions();
       if (!mounted) return;
+      final metrics = DuoLayoutMetrics.fromMediaQuery(MediaQuery.of(context));
+      if (metrics.isUnfoldedInner) {
+        await store.setSession(id);
+        store.refreshSessionConfig();
+        if (!mounted) return;
+        setState(() {
+          _splitRightMode = 0;
+          _portraitTab = 0;
+          _portraitSessionPanelOpen = false;
+        });
+        return;
+      }
       await openChat(context, store, id);
     });
   }
 
+  void _selectSessionInline(String sessionId) {
+    if (!mounted) return;
+    setState(() {
+      _splitRightMode = 0;
+      _portraitTab = 0;
+      _portraitSessionPanelOpen = false;
+    });
+  }
+
+  /// 确保展开内屏下若尚未选中任何会话，默认聚焦最新一条活跃会话。
+  String? _effectiveInlineSessionId() {
+    final current = store.sessionId;
+    if (current != null && current.isNotEmpty) return current;
+    final active = store.activeSessions;
+    if (active.isNotEmpty) {
+      final firstId = active.first.id;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && (store.sessionId == null || store.sessionId!.isEmpty)) {
+          unawaited(store.setSession(firstId));
+          store.refreshSessionConfig();
+        }
+      });
+      return firstId;
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final rawMq = MediaQuery.of(context);
+    final metrics = DuoLayoutMetrics.fromMediaQuery(rawMq);
+    final normalizedMq = metrics.normalizeMediaQuery(rawMq);
+
     if (!_configured || _reconfiguring) {
-      return Scaffold(
-        body: ConnectionSheet(
-          onConnected: _recheck,
-          // 重新配置时允许放弃：保留旧配置返回主界面
-          onCancel: _reconfiguring
-              ? () => setState(() => _reconfiguring = false)
-              : null,
+      return MediaQuery(
+        data: normalizedMq,
+        child: Scaffold(
+          body: ConnectionSheet(
+            onConnected: _recheck,
+            // 重新配置时允许放弃：保留旧配置返回主界面
+            onCancel: _reconfiguring
+                ? () => setState(() => _reconfiguring = false)
+                : null,
+          ),
         ),
       );
     }
+
+    // 1. iPhone Duo 展开内屏横屏（951×669）：iPad mini 式左右主从双栏（左会话列表 + 右对话）
+    if (metrics.isSplitMasterDetail) {
+      return MediaQuery(
+        data: normalizedMq,
+        child: DuoAdaptiveScope(
+          metrics: metrics,
+          onSelectSessionInline: _selectSessionInline,
+          child: _buildDuoInnerLandscapeLayout(context, metrics),
+        ),
+      );
+    }
+
+    // 2. iPhone Duo 展开内屏竖屏（669×951）：iPad mini Chatbot 式（左窄轨 + 可折叠会话抽屉 + 居中对话）
+    if (metrics.isTabletPortrait) {
+      return MediaQuery(
+        data: normalizedMq,
+        child: DuoAdaptiveScope(
+          metrics: metrics,
+          onSelectSessionInline: _selectSessionInline,
+          child: _buildDuoInnerPortraitLayout(context, metrics),
+        ),
+      );
+    }
+
+    // 3. iPhone Duo 外屏竖屏（466×678）：QQ 音乐式右侧扩展导航栏 + 紧凑主内容区
+    if (metrics.hasOuterRightDock) {
+      return MediaQuery(
+        data: normalizedMq,
+        child: DuoAdaptiveScope(
+          metrics: metrics,
+          child: _buildDuoOuterPortraitLayout(context, metrics),
+        ),
+      );
+    }
+
     final titles = ['DSH', L10n.t('会话', 'Sessions'), L10n.t('设置', 'Settings')];
     // 返回键：非首页 tab 按返回 → 先回首页；首页再按返回 → 退出 App
-    return PopScope(
-      canPop: _index == 0,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && _index != 0) {
-          setState(() => _index = 0);
-        }
-      },
-      child: Scaffold(
+    return DuoAdaptiveScope(
+      metrics: metrics,
+      child: PopScope(
+        canPop: _index == 0,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop && _index != 0) {
+            setState(() => _index = 0);
+          }
+        },
+        child: Scaffold(
         key: _drawerKey,
         appBar: AppBar(
           leading: IconButton(
@@ -984,6 +1078,933 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
             SettingsScreen(store: store, onReconfigure: _reconfigure),
           ],
         ),
+      ),
+    ),
+  );
+  }
+
+  /// 连接状态小圆点（供外屏右侧栏、内屏左侧栏复用）。
+  Widget _buildStatusDot(BuildContext context) {
+    return Tooltip(
+      message: switch (store.connState) {
+        'connected' => L10n.t('电脑在线', 'PC online'),
+        'connecting' => L10n.t('连接中…', 'Connecting…'),
+        _ => L10n.t('电脑离线 · 点按重连', 'PC offline · tap to reconnect'),
+      },
+      child: InkWell(
+        customBorder: const CircleBorder(),
+        onTap: () => store.resume(),
+        child: Padding(
+          padding: const EdgeInsets.all(4),
+          child: Container(
+            width: 10,
+            height: 10,
+            decoration: BoxDecoration(
+              color: switch (store.connState) {
+                'connected' => DshColors.ok(context),
+                'connecting' => DshColors.warn(context),
+                _ => DshColors.ink3(context),
+              },
+              shape: BoxShape.circle,
+              border: Border.all(color: DshColors.line(context), width: 1),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// iPhone Duo 外屏竖屏布局（466×678）：
+  /// - 左侧主内容区（382pt）：紧凑顶栏 + 首页/会话/设置；
+  /// - 右侧扩展导航栏（84pt，避开右上角 84×170 状态角后常驻展示 首页/会话/设置/通知/新建会话，对齐 QQ 音乐外屏体验）。
+  Widget _buildDuoOuterPortraitLayout(
+    BuildContext context,
+    DuoLayoutMetrics metrics,
+  ) {
+    final titles = ['DSH', L10n.t('会话', 'Sessions'), L10n.t('设置', 'Settings')];
+    final line = DshColors.line(context);
+    final surface = DshColors.surface(context);
+    final brand = DshColors.brand(context);
+    final ink2 = DshColors.ink2(context);
+    final ink3 = DshColors.ink3(context);
+    final bottomPad = MediaQuery.of(context).padding.bottom;
+
+    return PopScope(
+      canPop: _index == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _index != 0) {
+          setState(() => _index = 0);
+        }
+      },
+      child: Scaffold(
+        key: _drawerKey,
+        drawer: store.workspaces.length >= 2
+            ? Drawer(
+                backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+                child: SafeArea(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                        child: Text(
+                          L10n.t('切换工作区', 'Switch Workspace'),
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: DshColors.ink(context),
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: ListView(
+                          children: [
+                            _workspaceItem(null),
+                            for (final w in store.workspaces) _workspaceItem(w),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            : null,
+        body: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // 左侧主内容带（紧凑顶栏，留出最大纵向高度给最近会话列表）
+            Expanded(
+              child: SafeArea(
+                right: false,
+                child: Column(
+                  children: [
+                    Container(
+                      height: 44,
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      decoration: BoxDecoration(
+                        border: Border(
+                          bottom: BorderSide(color: line, width: 0.6),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          _buildStatusDot(context),
+                          const SizedBox(width: 6),
+                          Text(
+                            titles[_index],
+                            style: TextStyle(
+                              fontSize: _index == 0 ? 18 : 16,
+                              fontWeight: FontWeight.w700,
+                              fontFamily: _index == 0 ? 'Georgia' : null,
+                              color:
+                                  _index == 0 &&
+                                      DshColors.skin(context).isBigFish
+                                  ? DshColors.accent(context)
+                                  : null,
+                            ),
+                          ),
+                          const Spacer(),
+                          if (store.workspaces.length >= 2)
+                            InkWell(
+                              borderRadius: BorderRadius.circular(999),
+                              onTap: () =>
+                                  _drawerKey.currentState?.openDrawer(),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: surface,
+                                  borderRadius: BorderRadius.circular(999),
+                                  border: Border.all(color: line),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.folder_outlined,
+                                      size: 13,
+                                      color: ink2,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    ConstrainedBox(
+                                      constraints: const BoxConstraints(
+                                        maxWidth: 110,
+                                      ),
+                                      child: Text(
+                                        store.workspaceTitle ??
+                                            L10n.t('全部', 'All'),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: ink2,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: IndexedStack(
+                        index: _index,
+                        children: [
+                          HomeScreen(
+                            store: store,
+                            visible: _index == 0,
+                            onOpenSession: () {
+                              if (mounted) setState(() {});
+                            },
+                          ),
+                          SessionsScreen(
+                            store: store,
+                            visible: _index == 1,
+                            onOpenSession: () {
+                              if (mounted) setState(() {});
+                            },
+                          ),
+                          SettingsScreen(
+                            store: store,
+                            onReconfigure: _reconfigure,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            // 右侧 iPhone Duo 专属扩展导航区（QQ 音乐式侧边栏，处于右上角状态块正下方）
+            Container(
+              width: metrics.rightStripWidth,
+              decoration: BoxDecoration(
+                color: surface.withValues(alpha: 0.92),
+                border: Border(left: BorderSide(color: line, width: 0.8)),
+              ),
+              padding: EdgeInsets.only(
+                top: metrics.rightStripTopReserve,
+                bottom: bottomPad > 0 ? bottomPad + 8 : 14,
+                left: 6,
+                right: 6,
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.start,
+                children: [
+                  _buildOuterDockItem(
+                    context,
+                    icon: Icons.home_outlined,
+                    selectedIcon: Icons.home,
+                    label: L10n.t('首页', 'Home'),
+                    selected: _index == 0,
+                    onTap: () => setState(() => _index = 0),
+                  ),
+                  const SizedBox(height: 6),
+                  _buildOuterDockItem(
+                    context,
+                    icon: Icons.history,
+                    selectedIcon: Icons.history,
+                    label: L10n.t('会话', 'Sessions'),
+                    selected: _index == 1,
+                    onTap: () => setState(() => _index = 1),
+                  ),
+                  const SizedBox(height: 6),
+                  _buildOuterDockItem(
+                    context,
+                    icon: Icons.settings_outlined,
+                    selectedIcon: Icons.settings,
+                    label: L10n.t('设置', 'Settings'),
+                    selected: _index == 2,
+                    onTap: () => setState(() => _index = 2),
+                  ),
+                  const Spacer(),
+                  // 通知按钮（带未读角标）
+                  InkWell(
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () => openNotificationsScreen(
+                      onOpenSession: () {
+                        if (mounted) setState(() => _index = 0);
+                      },
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 8,
+                        horizontal: 4,
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Badge(
+                            isLabelVisible: store.unread > 0,
+                            backgroundColor: DshColors.danger(context),
+                            label: Text(
+                              '${store.unread}',
+                              style: const TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
+                            child: Icon(
+                              Icons.notifications_none,
+                              size: 21,
+                              color: ink2,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            L10n.t('通知', 'Alerts'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 10.5, color: ink3),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  // 快速新建会话按钮
+                  SizedBox(
+                    width: double.infinity,
+                    height: 44,
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        backgroundColor: brand,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                      ),
+                      onPressed: _openNewSession,
+                      child: const Icon(Icons.add, size: 22),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOuterDockItem(
+    BuildContext context, {
+    required IconData icon,
+    required IconData selectedIcon,
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    final brand = DshColors.brand(context);
+    final brandSoft = DshColors.brandSoft(context);
+    final ink2 = DshColors.ink2(context);
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+        decoration: BoxDecoration(
+          color: selected ? brandSoft : Colors.transparent,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              selected ? selectedIcon : icon,
+              size: 21,
+              color: selected ? brand : ink2,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: selected ? brand : ink2,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// iPhone Duo 展开内屏横屏布局（951×669，iPad mini 横屏风格）：
+  /// - 左侧常驻会话与工作区侧边栏（310pt）：顶栏（状态+通知+新建会话）+ 会话列表 + 底部模式切换（对话/首页/设置）；
+  /// - 右侧主舞台（Expanded）：直接内嵌当前选中的 ChatScreen（或切换查看首页/设置），全屏铺满无黑边。
+  Widget _buildDuoInnerLandscapeLayout(
+    BuildContext context,
+    DuoLayoutMetrics metrics,
+  ) {
+    final line = DshColors.line(context);
+    final surface = DshColors.surface(context);
+    final brand = DshColors.brand(context);
+    final brandSoft = DshColors.brandSoft(context);
+    final ink2 = DshColors.ink2(context);
+    final activeSid = _effectiveInlineSessionId();
+    final rightCornerW = metrics.topRightCornerBlock.width;
+
+    return Scaffold(
+      body: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 左栏：iPad mini 式主侧栏（会话列表常驻）
+          Container(
+            width: 310,
+            decoration: BoxDecoration(
+              color: Theme.of(context).scaffoldBackgroundColor,
+              border: Border(right: BorderSide(color: line, width: 0.8)),
+            ),
+            child: SafeArea(
+              right: false,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // 左栏顶部：DSH 标题 + 状态点 + 通知 + 新建会话
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 12, 8),
+                    child: Row(
+                      children: [
+                        _buildStatusDot(context),
+                        const SizedBox(width: 6),
+                        const Text(
+                          'DSH',
+                          style: TextStyle(
+                            fontSize: 21,
+                            fontWeight: FontWeight.w700,
+                            fontFamily: 'Georgia',
+                          ),
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          tooltip: L10n.t('通知', 'Notifications'),
+                          icon: Badge(
+                            isLabelVisible: store.unread > 0,
+                            backgroundColor: DshColors.danger(context),
+                            label: Text(
+                              '${store.unread}',
+                              style: const TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.notifications_none,
+                              size: 20,
+                            ),
+                          ),
+                          onPressed: () => openNotificationsScreen(
+                            onOpenSession: () {
+                              if (mounted) {
+                                setState(() => _splitRightMode = 0);
+                              }
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        FilledButton.icon(
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                            minimumSize: const Size(0, 36),
+                          ),
+                          onPressed: _openNewSession,
+                          icon: const Icon(Icons.add, size: 17),
+                          label: Text(
+                            L10n.t('新建', 'New'),
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Divider(height: 1, color: line),
+                  // 左栏中部：会话列表（点击任意会话右侧立即切换为该对话）
+                  Expanded(
+                    child: SessionsScreen(
+                      store: store,
+                      visible: true,
+                      onOpenSession: () {
+                        if (mounted) {
+                          setState(() => _splitRightMode = 0);
+                        }
+                      },
+                    ),
+                  ),
+                  Divider(height: 1, color: line),
+                  // 左栏底部：切换右栏显示内容（当前对话 / 首页概览 / 设置）
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                    child: Row(
+                      children: [
+                        _buildSplitFooterTab(
+                          context,
+                          icon: Icons.chat_bubble_outline,
+                          label: L10n.t('对话', 'Chat'),
+                          selected: _splitRightMode == 0,
+                          brand: brand,
+                          brandSoft: brandSoft,
+                          ink2: ink2,
+                          onTap: () => setState(() => _splitRightMode = 0),
+                        ),
+                        const SizedBox(width: 6),
+                        _buildSplitFooterTab(
+                          context,
+                          icon: Icons.home_outlined,
+                          label: L10n.t('首页', 'Home'),
+                          selected: _splitRightMode == 1,
+                          brand: brand,
+                          brandSoft: brandSoft,
+                          ink2: ink2,
+                          onTap: () => setState(() => _splitRightMode = 1),
+                        ),
+                        const SizedBox(width: 6),
+                        _buildSplitFooterTab(
+                          context,
+                          icon: Icons.settings_outlined,
+                          label: L10n.t('设置', 'Settings'),
+                          selected: _splitRightMode == 2,
+                          brand: brand,
+                          brandSoft: brandSoft,
+                          ink2: ink2,
+                          onTap: () => setState(() => _splitRightMode = 2),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // 右栏：对话主区域（或首页 / 设置）
+          Expanded(
+            child: _splitRightMode == 2
+                ? Scaffold(
+                    appBar: AppBar(
+                      automaticallyImplyLeading: false,
+                      title: Text(
+                        L10n.t('设置', 'Settings'),
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      actions: [
+                        if (rightCornerW > 0) SizedBox(width: rightCornerW),
+                      ],
+                    ),
+                    body: Align(
+                      alignment: Alignment.topCenter,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 680),
+                        child: SettingsScreen(
+                          store: store,
+                          onReconfigure: _reconfigure,
+                        ),
+                      ),
+                    ),
+                  )
+                : (_splitRightMode == 1 || activeSid == null)
+                ? Scaffold(
+                    appBar: AppBar(
+                      automaticallyImplyLeading: false,
+                      title: Text(
+                        L10n.t('首页概览', 'Overview'),
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      actions: [
+                        if (activeSid != null)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: TextButton.icon(
+                              style: TextButton.styleFrom(
+                                backgroundColor: surface,
+                              ),
+                              onPressed: () =>
+                                  setState(() => _splitRightMode = 0),
+                              icon: const Icon(
+                                Icons.chat_bubble_outline,
+                                size: 16,
+                              ),
+                              label: Text(L10n.t('返回当前对话', 'Back to Chat')),
+                            ),
+                          ),
+                        if (rightCornerW > 0) SizedBox(width: rightCornerW),
+                      ],
+                    ),
+                    body: HomeScreen(
+                      store: store,
+                      visible: true,
+                      onOpenSession: () {
+                        if (mounted) setState(() => _splitRightMode = 0);
+                      },
+                    ),
+                  )
+                : ChatScreen(
+                    key: ValueKey('duo-landscape-chat-$activeSid'),
+                    store: store,
+                    embedded: true,
+                    onTitleChanged: () {
+                      if (mounted) setState(() {});
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSplitFooterTab(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required bool selected,
+    required Color brand,
+    required Color brandSoft,
+    required Color ink2,
+    required VoidCallback onTap,
+  }) {
+    return Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+          decoration: BoxDecoration(
+            color: selected ? brandSoft : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 16, color: selected ? brand : ink2),
+              const SizedBox(width: 5),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                    color: selected ? brand : ink2,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// iPhone Duo 展开内屏竖屏布局（669×951，iPad mini Chatbot 风格）：
+  /// - 左侧常驻 68pt 窄导航轨（可一键展开/收起会话侧栏，直接切换 对话 / 首页 / 会话 / 设置）；
+  /// - 右侧主区域居中舒适阅读宽，并自动避让右上角 134×82 状态岛。
+  Widget _buildDuoInnerPortraitLayout(
+    BuildContext context,
+    DuoLayoutMetrics metrics,
+  ) {
+    final line = DshColors.line(context);
+    final surface = DshColors.surface(context);
+    final brand = DshColors.brand(context);
+    final activeSid = _effectiveInlineSessionId();
+    final rightCornerW = metrics.topRightCornerBlock.width;
+
+    return Scaffold(
+      body: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 左侧 68pt 导航轨（对齐 iPad mini 上 Claude / ChatGPT / DeepSeek 布局）
+          Container(
+            width: 68,
+            decoration: BoxDecoration(
+              color: surface.withValues(alpha: 0.94),
+              border: Border(right: BorderSide(color: line, width: 0.8)),
+            ),
+            child: SafeArea(
+              right: false,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+                child: Column(
+                  children: [
+                    // 展开/收起会话侧栏按钮
+                    IconButton(
+                      tooltip: L10n.t('展开/收起会话栏', 'Toggle session sidebar'),
+                      icon: Icon(
+                        _portraitSessionPanelOpen
+                            ? Icons.menu_open
+                            : Icons.view_sidebar_outlined,
+                        size: 21,
+                        color: _portraitSessionPanelOpen
+                            ? brand
+                            : DshColors.ink2(context),
+                      ),
+                      onPressed: () => setState(
+                        () => _portraitSessionPanelOpen =
+                            !_portraitSessionPanelOpen,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    _buildStatusDot(context),
+                    const SizedBox(height: 12),
+                    _buildOuterDockItem(
+                      context,
+                      icon: Icons.chat_bubble_outline,
+                      selectedIcon: Icons.chat_bubble,
+                      label: L10n.t('对话', 'Chat'),
+                      selected: _portraitTab == 0,
+                      onTap: () => setState(() => _portraitTab = 0),
+                    ),
+                    const SizedBox(height: 6),
+                    _buildOuterDockItem(
+                      context,
+                      icon: Icons.home_outlined,
+                      selectedIcon: Icons.home,
+                      label: L10n.t('首页', 'Home'),
+                      selected: _portraitTab == 1,
+                      onTap: () => setState(() => _portraitTab = 1),
+                    ),
+                    const SizedBox(height: 6),
+                    _buildOuterDockItem(
+                      context,
+                      icon: Icons.history,
+                      selectedIcon: Icons.history,
+                      label: L10n.t('会话', 'Sessions'),
+                      selected: _portraitTab == 2,
+                      onTap: () => setState(() => _portraitTab = 2),
+                    ),
+                    const SizedBox(height: 6),
+                    _buildOuterDockItem(
+                      context,
+                      icon: Icons.settings_outlined,
+                      selectedIcon: Icons.settings,
+                      label: L10n.t('设置', 'Settings'),
+                      selected: _portraitTab == 3,
+                      onTap: () => setState(() => _portraitTab = 3),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      tooltip: L10n.t('通知', 'Notifications'),
+                      icon: Badge(
+                        isLabelVisible: store.unread > 0,
+                        backgroundColor: DshColors.danger(context),
+                        label: Text(
+                          '${store.unread}',
+                          style: const TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                        ),
+                        child: const Icon(Icons.notifications_none, size: 21),
+                      ),
+                      onPressed: () => openNotificationsScreen(
+                        onOpenSession: () {
+                          if (mounted) {
+                            setState(() {
+                              _portraitTab = 0;
+                              _portraitSessionPanelOpen = false;
+                            });
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: 44,
+                      height: 44,
+                      child: FilledButton(
+                        style: FilledButton.styleFrom(
+                          padding: EdgeInsets.zero,
+                          backgroundColor: brand,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(13),
+                          ),
+                        ),
+                        onPressed: _openNewSession,
+                        child: const Icon(Icons.add, size: 21),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          // 可折叠的快速会话侧栏（竖屏下一键呼出/收起）
+          if (_portraitSessionPanelOpen)
+            Container(
+              width: 248,
+              decoration: BoxDecoration(
+                color: Theme.of(context).scaffoldBackgroundColor,
+                border: Border(right: BorderSide(color: line, width: 0.8)),
+              ),
+              child: SafeArea(
+                left: false,
+                right: false,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 12, 10, 8),
+                      child: Row(
+                        children: [
+                          Text(
+                            L10n.t('会话列表', 'Sessions'),
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const Spacer(),
+                          IconButton(
+                            visualDensity: VisualDensity.compact,
+                            icon: const Icon(Icons.close, size: 18),
+                            onPressed: () => setState(
+                              () => _portraitSessionPanelOpen = false,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Divider(height: 1, color: line),
+                    Expanded(
+                      child: SessionsScreen(
+                        store: store,
+                        visible: true,
+                        onOpenSession: () {
+                          if (mounted) {
+                            setState(() {
+                              _portraitTab = 0;
+                              _portraitSessionPanelOpen = false;
+                            });
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          // 右侧主内容区
+          Expanded(
+            child: switch (_portraitTab) {
+              0 when activeSid != null => ChatScreen(
+                key: ValueKey('duo-portrait-chat-$activeSid'),
+                store: store,
+                embedded: true,
+                leading: IconButton(
+                  icon: Icon(
+                    _portraitSessionPanelOpen
+                        ? Icons.menu_open
+                        : Icons.view_sidebar_outlined,
+                    size: 20,
+                  ),
+                  tooltip: L10n.t('会话列表', 'Sessions'),
+                  onPressed: () => setState(
+                    () =>
+                        _portraitSessionPanelOpen = !_portraitSessionPanelOpen,
+                  ),
+                ),
+                onTitleChanged: () {
+                  if (mounted) setState(() {});
+                },
+              ),
+              2 => Scaffold(
+                appBar: AppBar(
+                  automaticallyImplyLeading: false,
+                  title: Text(
+                    L10n.t('全部会话', 'All Sessions'),
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  actions: [
+                    if (rightCornerW > 0) SizedBox(width: rightCornerW),
+                  ],
+                ),
+                body: Align(
+                  alignment: Alignment.topCenter,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 640),
+                    child: SessionsScreen(
+                      store: store,
+                      visible: true,
+                      onOpenSession: () {
+                        if (mounted) setState(() => _portraitTab = 0);
+                      },
+                    ),
+                  ),
+                ),
+              ),
+              3 => Scaffold(
+                appBar: AppBar(
+                  automaticallyImplyLeading: false,
+                  title: Text(
+                    L10n.t('设置', 'Settings'),
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  actions: [
+                    if (rightCornerW > 0) SizedBox(width: rightCornerW),
+                  ],
+                ),
+                body: Align(
+                  alignment: Alignment.topCenter,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 640),
+                    child: SettingsScreen(
+                      store: store,
+                      onReconfigure: _reconfigure,
+                    ),
+                  ),
+                ),
+              ),
+              _ => Scaffold(
+                appBar: AppBar(
+                  automaticallyImplyLeading: false,
+                  title: const Text(
+                    'DSH',
+                    style: TextStyle(
+                      fontSize: 19,
+                      fontWeight: FontWeight.w700,
+                      fontFamily: 'Georgia',
+                    ),
+                  ),
+                  actions: [
+                    if (rightCornerW > 0) SizedBox(width: rightCornerW),
+                  ],
+                ),
+                body: HomeScreen(
+                  store: store,
+                  visible: true,
+                  onOpenSession: () {
+                    if (mounted) setState(() => _portraitTab = 0);
+                  },
+                ),
+              ),
+            },
+          ),
+        ],
       ),
     );
   }

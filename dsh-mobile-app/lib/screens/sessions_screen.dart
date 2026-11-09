@@ -247,13 +247,24 @@ class _SessionsScreenState extends State<SessionsScreen>
                     separatorBuilder: (_, _) => Divider(height: 1, color: line),
                     itemBuilder: (context, i) {
                       final s = sessions[i];
+                      final isSelected = store.sessionId == s.id;
                       return InkWell(
                         // 稳定行标识：列表复用（回收重建）时动效状态不能跟错会话
                         key: ValueKey('session-row-${s.id}'),
+                        borderRadius: BorderRadius.circular(10),
                         onTap: () => _open(s),
                         onLongPress: () => _showActions(s),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 2),
+                        child: Container(
+                          decoration: isSelected
+                              ? BoxDecoration(
+                                  color: DshColors.brandSoft(context),
+                                  borderRadius: BorderRadius.circular(10),
+                                )
+                              : null,
+                          padding: EdgeInsets.symmetric(
+                            vertical: 11,
+                            horizontal: isSelected ? 8 : 2,
+                          ),
                           child: Row(
                             children: [
                               SessionIcon(
@@ -267,7 +278,20 @@ class _SessionsScreenState extends State<SessionsScreen>
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text(s.label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14)),
+                                    Text(
+                                      s.label,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: isSelected
+                                            ? FontWeight.w600
+                                            : FontWeight.w400,
+                                        color: isSelected
+                                            ? DshColors.brand(context)
+                                            : null,
+                                      ),
+                                    ),
                                     const SizedBox(height: 1),
                                     Text(
                                       // 显示时间与排序依据一致（sortKey = lastMessageAt 优先）
@@ -279,7 +303,13 @@ class _SessionsScreenState extends State<SessionsScreen>
                                   ],
                                 ),
                               ),
-                              Icon(Icons.chevron_right, size: 18, color: ink3),
+                              Icon(
+                                Icons.chevron_right,
+                                size: 18,
+                                color: isSelected
+                                    ? DshColors.brand(context)
+                                    : ink3,
+                              ),
                             ],
                           ),
                         ),
