@@ -40,11 +40,19 @@ jobs:
         working-directory: dsh-mobile-app
         run: flutter build ios --release --no-codesign
 
-      - name: Package Runner.app into DSH-Remote-Duo.ipa
+      - name: Package Runner.app into DSH-Remote-Duo.ipa (with iOS 27.1 SDK stamp for iPhone Duo full-screen)
         working-directory: dsh-mobile-app
         run: |
           mkdir -p build/ipa/Payload
           cp -R build/ios/iphoneos/Runner.app build/ipa/Payload/Runner.app
+          vtool -set-build-version ios 15.0 27.1 -replace -output build/ipa/Payload/Runner.app/Runner build/ipa/Payload/Runner.app/Runner
+          plutil -replace DTPlatformVersion -string "27.1" build/ipa/Payload/Runner.app/Info.plist
+          plutil -replace DTSDKName -string "iphoneos27.1" build/ipa/Payload/Runner.app/Info.plist
+          plutil -replace DTXcode -string "2710" build/ipa/Payload/Runner.app/Info.plist
+          plutil -replace DTXcodeBuild -string "27A9275" build/ipa/Payload/Runner.app/Info.plist
+          plutil -replace DTSDKBuild -string "24A94232" build/ipa/Payload/Runner.app/Info.plist
+          plutil -replace DTPlatformBuild -string "24A94232" build/ipa/Payload/Runner.app/Info.plist
+          plutil -replace UILaunchScreen -json '{}' build/ipa/Payload/Runner.app/Info.plist
           cd build/ipa
           ditto -c -k --sequesterRsrc --keepParent Payload DSH-Remote-Duo.ipa
           ls -lh DSH-Remote-Duo.ipa
