@@ -471,6 +471,9 @@ class _ChatScreenState extends State<ChatScreen> {
     _mySessionId = widget.store.sessionId; // v2.7.2 review(M1)：绑定本页会话
     // v3.3.1：告诉通知层「用户正看着这个会话」——此时不再弹系统通知（应用内已有卡片）。
     LocalNotifier.instance.visibleSession = _mySessionId;
+    widget.store.activeChatActionsTrigger = () {
+      if (mounted) unawaited(_openConversationActionRail());
+    };
     // S1：进入会话即收起横幅，并把该会话的未读通知标为已读（否则未读会积到几十条）。
     unawaited(widget.store.notifyChatOpened(_mySessionId ?? ''));
     _question = widget.store.questionForSession(_mySessionId);
@@ -516,6 +519,7 @@ class _ChatScreenState extends State<ChatScreen> {
     // v3.3.1：离开该会话（或页面被回收）后恢复系统通知；只在栈顶仍是自己时清空。
     if (LocalNotifier.instance.visibleSession == _mySessionId) {
       LocalNotifier.instance.visibleSession = null;
+      widget.store.activeChatActionsTrigger = null;
     }
     // The modal future owns and disposes its Git controller in _openGit.
     _gitController = null;
@@ -3156,7 +3160,22 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     setState(() {
       _sending = true;
-      if (!queued) _items.insert(0, _MsgItem.user(text)); // 最新在前：插入头部（视觉底部）
+      if (!queued && _pageAgentStatus != 'running') {
+        _items.insert(0, _MsgItem.user(text)); // 最新在前：插入头部（视觉底部）
+      } else {
+        // 运行中点「排队发送」或「插队发送」：0ms 立即插入本地队列停靠区，无需等请求返回才显示
+        final optId = 'opt-$requestId';
+        if (!_queue.any((r) => r['id'] == optId)) {
+          _queue = [
+            ..._queue,
+            {
+              'id': optId,
+              'text': text,
+              'placement': mode == 'steer' ? 'steering' : 'queued',
+            },
+          ];
+        }
+      }
     });
     _inputCtrl.clear();
     _scrollToBottom(force: true);
@@ -3467,6 +3486,25 @@ class _ChatScreenState extends State<ChatScreen> {
         _pendingSignature = signature;
       }
       requestId = _pendingRequestId!;
+      // 运行中发送图片（排队或插队）：在开始上传前 0ms 乐观插入队列停靠区，让用户立即看到排队/插队状态
+      if (_pageAgentStatus == 'running') {
+        final optId = 'opt-$requestId';
+        final preview = text.isNotEmpty
+            ? '$text [图片] ×${images.length}'
+            : '[图片] ×${images.length}';
+        setState(() {
+          if (!_queue.any((r) => r['id'] == optId)) {
+            _queue = [
+              ..._queue,
+              {
+                'id': optId,
+                'text': preview,
+                'placement': mode == 'steer' ? 'steering' : 'queued',
+              },
+            ];
+          }
+        });
+      }
       AppLog.instance.log(
         'Chat: 发送(图) → $id : ${images.length} 张, 共 $total 字节${mode == 'steer' ? '（插队）' : ''}',
       );
@@ -4158,9 +4196,10 @@ class _ChatScreenState extends State<ChatScreen> {
           _buildQueueDock(),
           // composer（v2.8.0 重构为两层，对齐 PC 端 InputBar）：
           // 第一层 = [/命令] + 输入框（独占最宽）；第二层 = 模型/权限/排队胶囊 + 上下文圆环 + 发送
-          // iPhone Duo 展开态下居中约束最大阅读宽度（对齐 iPad mini Chatbot 体验）
+          // iPhone Duo 展开态下居中约束最大阅读宽度，并关闭多余的 34pt 底部 SafeArea 黑边以扩充整个高度
           SafeArea(
             top: false,
+            bottom: !duoMetrics.isUnfoldedInner,
             child: Align(
               alignment: Alignment.bottomCenter,
               child: ConstrainedBox(
@@ -4168,7 +4207,12 @@ class _ChatScreenState extends State<ChatScreen> {
                   maxWidth: duoMetrics.isUnfoldedInner ? 720 : double.infinity,
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
+                  padding: EdgeInsets.fromLTRB(
+                    12,
+                    4,
+                    12,
+                    duoMetrics.isUnfoldedInner ? 8 : 10,
+                  ),
                   child: Container(
                     padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
                     decoration: BoxDecoration(
@@ -4366,11 +4410,13 @@ class _ChatScreenState extends State<ChatScreen> {
             ],
           ),
           actions: [
-            IconButton(
-              icon: const Icon(Icons.more_vert, size: 20),
-              tooltip: L10n.t('对话操作', 'Conversation actions'),
-              onPressed: _openConversationActionRail,
-            ),
+            // 展开内嵌态下「更多」按钮已统一收入右下角胶囊 Side 栏，不再在右上角单独悬置
+            if (!widget.embedded)
+              IconButton(
+                icon: const Icon(Icons.more_vert, size: 20),
+                tooltip: L10n.t('对话操作', 'Conversation actions'),
+                onPressed: _openConversationActionRail,
+              ),
             if (topRightClearance > 0) SizedBox(width: topRightClearance),
           ],
         ),
@@ -4378,12 +4424,11 @@ class _ChatScreenState extends State<ChatScreen> {
       );
     }
 
-    // iPhone Duo 外屏会话页专属双列结构：
+    // iPhone Duo 外屏会话页专属双列结构（训记风格右下角沉底布局）：
     // - 左列（Expanded，宽度与底部输入框完全一致 = 382pt）：顶部会话标题 + 消息流 + 底部输入框，绝不侵入右侧 side 栏；
-    // - 右列（84pt side 栏，避开右上角 84×170 状态块）：
-    //   1) 顶部向左返回圆形按钮 (←) + 更多操作圆形按钮 (⋯)
-    //   2) 中部椭圆形胶囊包裹的 DSH 每轮对话书签轨 (TurnNavigatorRail)，居中摆放不再贴右边缘
-    //   3) 底部直达底部的向下圆形按钮 (↓)
+    // - 右列（84pt side 栏，顶部留空给苹果灵动岛/音乐播放/时钟/电量环，控件整体沉底在右下角）：
+    //   1) 上方（若 >=2 轮）：52pt 宽椭圆形胶囊包裹的 DSH 每轮对话书签轨 (TurnNavigatorRail)
+    //   2) 下方：52pt 宽椭圆形操作胶囊（← 返回 / ⋯ 更多 / ↓ 回到底部），上下左右 100% 严丝合缝对齐
     final bottomPad = rawMq.padding.bottom;
     return MediaQuery(
       data: duoMetrics.normalizeMediaQuery(rawMq),
@@ -4397,58 +4442,68 @@ class _ChatScreenState extends State<ChatScreen> {
               width: duoMetrics.rightStripWidth,
               child: Padding(
                 padding: EdgeInsets.only(
-                  top: duoMetrics.rightStripTopReserve,
-                  bottom: bottomPad > 0 ? bottomPad + 10 : 16,
+                  top: math.max(duoMetrics.rightStripTopReserve, 240.0),
+                  bottom: bottomPad > 0 ? bottomPad : 14,
                   right: duoMetrics.rightRailHorizontalPadding.right,
                 ),
                 child: Column(
+                  mainAxisAlignment: MainAxisAlignment.end,
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    DuoCircleButton(
-                      icon: DuoSvgIconKind.arrowLeft,
-                      tooltip: L10n.t('返回', 'Back'),
-                      onTap: () => Navigator.of(context).pop(),
-                    ),
-                    const SizedBox(height: 8),
-                    DuoCircleButton(
-                      icon: DuoSvgIconKind.moreHorizontal,
-                      size: 40,
-                      tooltip: L10n.t('对话操作', 'Conversation actions'),
-                      onTap: _openConversationActionRail,
-                    ),
-                    const SizedBox(height: 10),
-                    Expanded(
-                      child: (!_inHistory && showTurnRail)
-                          ? Center(
-                              child: DuoPillPlatter(
-                                width: 44,
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 8,
-                                  horizontal: 6,
-                                ),
-                                child: TurnNavigatorRail(
-                                  anchors: turnAnchors,
-                                  unloadedTurns: unloadedTurns,
-                                  activeTurn: _activeTurn,
-                                  busyTurn: _busyTurn,
-                                  width: 32,
-                                  centerTicks: true,
-                                  verticalMargin: 16,
-                                  onNavigate: (anchor) =>
-                                      unawaited(_navigateToTurn(anchor)),
-                                ),
-                              ),
-                            )
-                          : const SizedBox.shrink(),
-                    ),
-                    const SizedBox(height: 10),
-                    if (!_inHistory)
-                      DuoCircleButton(
-                        icon: DuoSvgIconKind.arrowDown,
-                        primary: _showJumpToLatest,
-                        tooltip: L10n.t('回到底部', 'Jump to bottom'),
-                        onTap: _jumpToLatest,
+                    if (!_inHistory && showTurnRail)
+                      Flexible(
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: DuoPillPlatter(
+                            width: 52,
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 8,
+                              horizontal: 6,
+                            ),
+                            child: TurnNavigatorRail(
+                              anchors: turnAnchors,
+                              unloadedTurns: unloadedTurns,
+                              activeTurn: _activeTurn,
+                              busyTurn: _busyTurn,
+                              width: 38,
+                              centerTicks: true,
+                              verticalMargin: 12,
+                              onNavigate: (anchor) =>
+                                  unawaited(_navigateToTurn(anchor)),
+                            ),
+                          ),
+                        ),
                       ),
+                    DuoPillPlatter(
+                      width: 52,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          DuoNavPillButton(
+                            icon: DuoSvgIconKind.arrowLeft,
+                            label: L10n.t('返回', 'Back'),
+                            selected: false,
+                            onTap: () => Navigator.of(context).pop(),
+                          ),
+                          const SizedBox(height: 3),
+                          DuoNavPillButton(
+                            icon: DuoSvgIconKind.moreHorizontal,
+                            label: L10n.t('更多', 'More'),
+                            selected: false,
+                            onTap: _openConversationActionRail,
+                          ),
+                          if (!_inHistory) ...[
+                            const SizedBox(height: 3),
+                            DuoNavPillButton(
+                              icon: DuoSvgIconKind.arrowDown,
+                              label: L10n.t('底部', 'Bottom'),
+                              selected: _showJumpToLatest,
+                              onTap: _jumpToLatest,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
                   ],
                 ),
               ),

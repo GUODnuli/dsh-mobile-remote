@@ -23,6 +23,10 @@ String normalizeAgentStatus(Object? status) =>
 class AppStore extends ChangeNotifier {
   // ── 数据 ──
   String? sessionId; // 当前会话
+
+  /// iPhone Duo 展开态下由当前内嵌 ChatScreen 注册的「对话操作（Git/文件/任务/复制）」触发回调，
+  /// 供右下角统一 Side 栏直接调用，避免在展开态右上角单独悬置一个更多按钮。
+  void Function()? activeChatActionsTrigger;
   Catalog? catalog;
   SessionConfig sessionConfig = SessionConfig();
   List<Session> sessions = [];

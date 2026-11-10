@@ -1311,28 +1311,41 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
     );
   }
 
-  /// QQ 音乐 / 京东风格右侧 84pt Side 栏（外屏竖屏与展开横屏共用）：
-  /// 避开右上角状态块后，居中放置椭圆形导航胶囊（首页/会话/设置）+ 底部圆形通知钮 + 圆形「＋」新建钮。
+  /// 训记 / QQ 音乐风格右侧 84pt Side 栏（外屏竖屏与展开态共用）：
+  /// - 顶部留白（MainAxisAlignment.end）给苹果灵动岛（含音乐播放展开态）+ 时钟 + 电量环；
+  /// - 右下角放置统一 52pt 宽椭圆形胶囊（首页 / 会话 / 设置 / 通知 [带红点] / 可选对话更多操作）
+  ///   + 下方同宽 52pt 圆形「＋」新建会话按钮，上下左右 100% 严丝合缝对齐。
   Widget _buildDuoRightSideRail(
     BuildContext context, {
     required DuoLayoutMetrics metrics,
     required int selectedIndex,
     required ValueChanged<int> onSelectIndex,
+    bool showChatMore = false,
+    Widget? topAccessory,
   }) {
     final bottomPad = MediaQuery.of(context).padding.bottom;
+    final effectiveBottom = metrics.isUnfoldedInner
+        ? 12.0
+        : (bottomPad > 0 ? bottomPad : 14.0);
     return SizedBox(
       width: metrics.rightStripWidth,
       child: Padding(
         padding: EdgeInsets.only(
           top: metrics.rightStripTopReserve,
-          bottom: bottomPad > 0 ? bottomPad + 10 : 16,
+          bottom: effectiveBottom,
           right: metrics.rightRailHorizontalPadding.right,
         ),
         child: Column(
+          mainAxisAlignment: MainAxisAlignment.end,
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
+            const Spacer(),
+            if (topAccessory != null) ...[
+              topAccessory,
+              const SizedBox(height: 10),
+            ],
             DuoPillPlatter(
-              width: 46,
+              width: 52,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -1342,36 +1355,47 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
                     selected: selectedIndex == 0,
                     onTap: () => onSelectIndex(0),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 3),
                   DuoNavPillButton(
                     icon: DuoSvgIconKind.sessions,
                     label: L10n.t('会话', 'Chats'),
                     selected: selectedIndex == 1,
                     onTap: () => onSelectIndex(1),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 3),
                   DuoNavPillButton(
                     icon: DuoSvgIconKind.settings,
                     label: L10n.t('设置', 'Prefs'),
                     selected: selectedIndex == 2,
                     onTap: () => onSelectIndex(2),
                   ),
+                  const SizedBox(height: 3),
+                  DuoNavPillButton(
+                    icon: DuoSvgIconKind.bell,
+                    label: L10n.t('通知', 'Alerts'),
+                    selected: false,
+                    badgeCount: store.unread,
+                    onTap: () => openNotificationsScreen(
+                      onOpenSession: () {
+                        if (mounted) onSelectIndex(0);
+                      },
+                    ),
+                  ),
+                  if (showChatMore) ...[
+                    const SizedBox(height: 3),
+                    DuoNavPillButton(
+                      icon: DuoSvgIconKind.moreHorizontal,
+                      label: L10n.t('更多', 'More'),
+                      selected: false,
+                      onTap: () => store.activeChatActionsTrigger?.call(),
+                    ),
+                  ],
                 ],
               ),
             ),
-            const Spacer(),
+            const SizedBox(height: 12),
             DuoCircleButton(
-              icon: DuoSvgIconKind.bell,
-              badgeCount: store.unread,
-              tooltip: L10n.t('通知', 'Notifications'),
-              onTap: () => openNotificationsScreen(
-                onOpenSession: () {
-                  if (mounted) onSelectIndex(0);
-                },
-              ),
-            ),
-            const SizedBox(height: 10),
-            DuoCircleButton(
+              size: 52,
               icon: DuoSvgIconKind.plus,
               primary: true,
               tooltip: L10n.t('新建会话', 'New Session'),
@@ -1405,7 +1429,7 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
       body: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 左栏：iPad mini 式主侧栏（会话列表常驻）
+          // 左栏：iPad mini 式主侧栏（会话列表常驻，底部直通屏幕底边消除黑边）
           Container(
             width: 276,
             decoration: BoxDecoration(
@@ -1414,6 +1438,7 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
             ),
             child: SafeArea(
               right: false,
+              bottom: false,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -1522,11 +1547,12 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
                     },
                   ),
           ),
-          // 右栏：展开形态下同样保留 84pt 右侧胶囊/圆钮 Side 栏（对齐 QQ 音乐 / 京东展开态设计，与状态栏同轴对齐）
+          // 右栏：展开形态下同样保留 84pt 右下角胶囊/圆钮 Side 栏（把更多按钮也收入右下角胶囊中）
           _buildDuoRightSideRail(
             context,
             metrics: metrics,
             selectedIndex: selectedRailIndex,
+            showChatMore: _splitRightMode == 0 && activeSid != null,
             onSelectIndex: (i) {
               setState(() {
                 _splitRightMode = switch (i) {
@@ -1552,7 +1578,6 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
   ) {
     final line = DshColors.line(context);
     final activeSid = _effectiveInlineSessionId();
-    final bottomPad = MediaQuery.of(context).padding.bottom;
 
     return Scaffold(
       body: Row(
@@ -1568,6 +1593,7 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
               ),
               child: SafeArea(
                 right: false,
+                bottom: false,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -1694,82 +1720,34 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
               ),
             },
           ),
-          // 右侧 84pt 胶囊/圆钮 Side 栏（避开右上角状态岛，并与状态栏中轴对齐）
-          SizedBox(
-            width: metrics.rightStripWidth,
-            child: Padding(
-              padding: EdgeInsets.only(
-                top: metrics.rightStripTopReserve,
-                bottom: bottomPad > 0 ? bottomPad + 10 : 16,
-                right: metrics.rightRailHorizontalPadding.right,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  DuoCircleButton(
-                    icon: DuoSvgIconKind.sidebar,
-                    primary: _portraitSessionPanelOpen,
-                    tooltip: L10n.t('展开/收起会话栏', 'Toggle session sidebar'),
-                    onTap: () => setState(
-                      () => _portraitSessionPanelOpen =
-                          !_portraitSessionPanelOpen,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  DuoPillPlatter(
-                    width: 46,
-                    child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      DuoNavPillButton(
-                        icon: DuoSvgIconKind.sessions,
-                        label: L10n.t('对话', 'Chat'),
-                        selected: _portraitTab == 0,
-                        onTap: () => setState(() => _portraitTab = 0),
-                      ),
-                      const SizedBox(height: 4),
-                      DuoNavPillButton(
-                        icon: DuoSvgIconKind.home,
-                        label: L10n.t('首页', 'Home'),
-                        selected: _portraitTab == 1,
-                        onTap: () => setState(() => _portraitTab = 1),
-                      ),
-                      const SizedBox(height: 4),
-                      DuoNavPillButton(
-                        icon: DuoSvgIconKind.settings,
-                        label: L10n.t('设置', 'Prefs'),
-                        selected: _portraitTab == 3,
-                        onTap: () => setState(() => _portraitTab = 3),
-                      ),
-                    ],
-                  ),
-                ),
-                const Spacer(),
-                DuoCircleButton(
-                  icon: DuoSvgIconKind.bell,
-                  badgeCount: store.unread,
-                  tooltip: L10n.t('通知', 'Notifications'),
-                  onTap: () => openNotificationsScreen(
-                    onOpenSession: () {
-                      if (mounted) {
-                        setState(() {
-                          _portraitTab = 0;
-                          _portraitSessionPanelOpen = false;
-                        });
-                      }
-                    },
-                  ),
-                ),
-                  const SizedBox(height: 10),
-                  DuoCircleButton(
-                    icon: DuoSvgIconKind.plus,
-                    primary: true,
-                    tooltip: L10n.t('新建会话', 'New Session'),
-                    onTap: _openNewSession,
-                  ),
-                ],
+          // 右侧 84pt 胶囊/圆钮 Side 栏（统一沉底在右下角，避开右上角灵动岛与状态岛）
+          _buildDuoRightSideRail(
+            context,
+            metrics: metrics,
+            selectedIndex: switch (_portraitTab) {
+              1 => 0, // 首页
+              3 => 2, // 设置
+              _ => 1, // 对话/会话
+            },
+            showChatMore: _portraitTab == 0 && activeSid != null,
+            topAccessory: DuoCircleButton(
+              size: 52,
+              icon: DuoSvgIconKind.sidebar,
+              primary: _portraitSessionPanelOpen,
+              tooltip: L10n.t('展开/收起会话栏', 'Toggle session sidebar'),
+              onTap: () => setState(
+                () => _portraitSessionPanelOpen = !_portraitSessionPanelOpen,
               ),
             ),
+            onSelectIndex: (i) {
+              setState(() {
+                _portraitTab = switch (i) {
+                  0 => 1, // 首页
+                  2 => 3, // 设置
+                  _ => 0, // 对话
+                };
+              });
+            },
           ),
         ],
       ),

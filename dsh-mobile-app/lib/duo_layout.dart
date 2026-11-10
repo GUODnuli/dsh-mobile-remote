@@ -455,7 +455,7 @@ class _DuoSvgIconPainter extends CustomPainter {
       oldDelegate.active != active;
 }
 
-/// 椭圆形胶囊托盘（QQ 音乐 / 京东右侧胶囊容器）。
+/// 椭圆形胶囊托盘（对齐训记 / QQ 音乐 / 京东右侧底部胶囊容器，标准宽 52pt，与下方 52pt 圆形＋号完全同宽对齐）。
 class DuoPillPlatter extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry padding;
@@ -464,8 +464,8 @@ class DuoPillPlatter extends StatelessWidget {
   const DuoPillPlatter({
     super.key,
     required this.child,
-    this.padding = const EdgeInsets.symmetric(vertical: 6, horizontal: 3),
-    this.width = 46,
+    this.padding = const EdgeInsets.symmetric(vertical: 6, horizontal: 5),
+    this.width = 52,
   });
 
   @override
@@ -477,14 +477,14 @@ class DuoPillPlatter extends StatelessWidget {
       width: width,
       padding: padding,
       decoration: BoxDecoration(
-        color: surface.withValues(alpha: isDark ? 0.90 : 0.96),
+        color: surface.withValues(alpha: isDark ? 0.92 : 0.96),
         borderRadius: BorderRadius.circular(999),
         border: Border.all(color: line, width: 0.9),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: isDark ? 0.28 : 0.07),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
           ),
         ],
       ),
@@ -493,18 +493,20 @@ class DuoPillPlatter extends StatelessWidget {
   }
 }
 
-/// 胶囊托盘内的单个椭圆形/圆形 Tab 按钮（带 SVG 图标与精简文字）。
+/// 胶囊托盘内的单个圆形/椭圆形按钮（带 SVG 图标、可选精简文字与未读红点角标）。
 class DuoNavPillButton extends StatelessWidget {
   final DuoSvgIconKind icon;
-  final String label;
+  final String? label;
   final bool selected;
+  final int badgeCount;
   final VoidCallback onTap;
 
   const DuoNavPillButton({
     super.key,
     required this.icon,
-    required this.label,
+    this.label,
     required this.selected,
+    this.badgeCount = 0,
     required this.onTap,
   });
 
@@ -513,7 +515,47 @@ class DuoNavPillButton extends StatelessWidget {
     final brand = DshColors.brand(context);
     final brandSoft = DshColors.brandSoft(context);
     final ink2 = DshColors.ink2(context);
+    final surface = DshColors.surface(context);
     final fg = selected ? brand : ink2;
+    final hasLabel = label != null && label!.isNotEmpty;
+
+    Widget iconWidget = DuoSvgIcon(
+      kind: icon,
+      size: hasLabel ? 17.5 : 19,
+      color: fg,
+      active: selected,
+    );
+
+    if (badgeCount > 0) {
+      iconWidget = Stack(
+        clipBehavior: Clip.none,
+        children: [
+          iconWidget,
+          Positioned(
+            top: -5,
+            right: -8,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+              decoration: BoxDecoration(
+                color: DshColors.danger(context),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: surface, width: 1.2),
+              ),
+              child: Text(
+                badgeCount > 99 ? '99+' : '$badgeCount',
+                style: const TextStyle(
+                  fontSize: 8,
+                  height: 1.0,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -521,33 +563,35 @@ class DuoNavPillButton extends StatelessWidget {
         onTap: onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
-          width: 40,
-          padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 2),
+          width: 42,
+          constraints: BoxConstraints(minHeight: hasLabel ? 44 : 42),
+          padding: EdgeInsets.symmetric(
+            vertical: hasLabel ? 6 : 11,
+            horizontal: 2,
+          ),
           decoration: BoxDecoration(
             color: selected ? brandSoft : Colors.transparent,
             borderRadius: BorderRadius.circular(999),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              DuoSvgIcon(
-                kind: icon,
-                size: 18,
-                color: fg,
-                active: selected,
-              ),
-              const SizedBox(height: 3),
-              Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 9.5,
-                  height: 1.1,
-                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  color: fg,
+              iconWidget,
+              if (hasLabel) ...[
+                const SizedBox(height: 2.5),
+                Text(
+                  label!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 9.0,
+                    height: 1.05,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                    color: fg,
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
         ),
@@ -556,7 +600,7 @@ class DuoNavPillButton extends StatelessWidget {
   }
 }
 
-/// 独立圆形悬浮按钮（用于通知、＋新建、返回、跳到底部、对话更多操作）。
+/// 独立圆形悬浮按钮（默认直径 52pt，与上方 52pt 胶囊托盘左右边缘 100% 严丝合缝对齐）。
 class DuoCircleButton extends StatelessWidget {
   final DuoSvgIconKind icon;
   final String? tooltip;
@@ -572,7 +616,7 @@ class DuoCircleButton extends StatelessWidget {
     this.tooltip,
     this.primary = false,
     this.badgeCount = 0,
-    this.size = 44,
+    this.size = 52,
   });
 
   @override
@@ -601,9 +645,7 @@ class DuoCircleButton extends StatelessWidget {
             border: primary ? null : Border.all(color: line, width: 0.9),
             boxShadow: [
               BoxShadow(
-                color: primary
-                    ? brand.withValues(alpha: 0.32)
-                    : Colors.black.withValues(alpha: isDark ? 0.26 : 0.07),
+                color: Colors.black.withValues(alpha: isDark ? 0.28 : 0.08),
                 blurRadius: 10,
                 offset: const Offset(0, 3),
               ),
@@ -612,7 +654,7 @@ class DuoCircleButton extends StatelessWidget {
           child: Center(
             child: DuoSvgIcon(
               kind: icon,
-              size: size * 0.42,
+              size: size * 0.40,
               color: primary ? onBrand : ink,
               active: primary,
             ),
@@ -622,31 +664,38 @@ class DuoCircleButton extends StatelessWidget {
     );
 
     if (badgeCount > 0) {
-      btn = Stack(
-        clipBehavior: Clip.none,
-        children: [
-          btn,
-          Positioned(
-            top: -2,
-            right: -2,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-              decoration: BoxDecoration(
-                color: DshColors.danger(context),
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: surface, width: 1.5),
-              ),
-              child: Text(
-                badgeCount > 99 ? '99+' : '$badgeCount',
-                style: const TextStyle(
-                  fontSize: 8.5,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
+      btn = SizedBox(
+        width: size,
+        height: size,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned.fill(child: btn),
+            Positioned(
+              top: 0,
+              right: 0,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 5,
+                  vertical: 1.5,
+                ),
+                decoration: BoxDecoration(
+                  color: DshColors.danger(context),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: surface, width: 1.5),
+                ),
+                child: Text(
+                  badgeCount > 99 ? '99+' : '$badgeCount',
+                  style: const TextStyle(
+                    fontSize: 8.5,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       );
     }
 
