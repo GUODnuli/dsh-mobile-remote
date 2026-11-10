@@ -76,6 +76,15 @@ class DuoLayoutMetrics {
   /// 是否为展开内屏竖屏（iPad mini Chatbot 式）
   bool get isTabletPortrait => posture == DuoPosture.duoInnerPortrait;
 
+  /// iPhone Duo 实测状态栏对齐补偿：
+  /// 在 466×678 外屏（1398×2034 px）中，右侧 84pt 栏范围是 x: 382..466 pt（中心 424pt），
+  /// 但系统右上角状态栏（时钟 17:12、电量环 93%、信号点）因为避让 59pt 外侧大圆角，
+  /// 实测像素范围为 x: 1193..1315 px（397.7..438.3 pt，宽 40.7pt），视觉中心在 x = 418.0 pt（即偏左 6pt）。
+  /// 因此在 84pt 右侧栏内部加 `right: 12` 内边距，可用宽度变为 72pt（382..454 pt），
+  /// 内部水平中心恰好落在 382 + 36 = 418.0 pt，与系统状态栏中轴线 100% 像素级对齐。
+  EdgeInsets get rightRailHorizontalPadding =>
+      hasRightSideRail ? const EdgeInsets.only(right: 12) : EdgeInsets.zero;
+
   /// 将 UIKit 因角落状态块而放大的整边 safeAreaInsets.right 归零（由我们的右侧 84pt 显式 side 栏接管），
   /// 确保左侧主内容区与底部输入框宽度严格一致且绝不侵入右侧 side 栏。
   MediaQueryData normalizeMediaQuery(MediaQueryData base) {
@@ -455,8 +464,8 @@ class DuoPillPlatter extends StatelessWidget {
   const DuoPillPlatter({
     super.key,
     required this.child,
-    this.padding = const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-    this.width = 52,
+    this.padding = const EdgeInsets.symmetric(vertical: 6, horizontal: 3),
+    this.width = 46,
   });
 
   @override
@@ -512,8 +521,8 @@ class DuoNavPillButton extends StatelessWidget {
         onTap: onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
-          width: 44,
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
+          width: 40,
+          padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 2),
           decoration: BoxDecoration(
             color: selected ? brandSoft : Colors.transparent,
             borderRadius: BorderRadius.circular(999),

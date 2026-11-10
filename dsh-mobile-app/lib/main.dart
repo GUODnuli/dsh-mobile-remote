@@ -1326,12 +1326,13 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
         padding: EdgeInsets.only(
           top: metrics.rightStripTopReserve,
           bottom: bottomPad > 0 ? bottomPad + 10 : 16,
+          right: metrics.rightRailHorizontalPadding.right,
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             DuoPillPlatter(
-              width: 52,
+              width: 46,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -1521,25 +1522,20 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
                     },
                   ),
           ),
-          // 右栏：展开形态下同样保留 84pt 右侧胶囊/圆钮 Side 栏（对齐 QQ 音乐 / 京东展开态设计）
-          Container(
-            decoration: BoxDecoration(
-              border: Border(left: BorderSide(color: line, width: 0.6)),
-            ),
-            child: _buildDuoRightSideRail(
-              context,
-              metrics: metrics,
-              selectedIndex: selectedRailIndex,
-              onSelectIndex: (i) {
-                setState(() {
-                  _splitRightMode = switch (i) {
-                    0 => 1, // 首页
-                    2 => 2, // 设置
-                    _ => 0, // 会话/对话
-                  };
-                });
-              },
-            ),
+          // 右栏：展开形态下同样保留 84pt 右侧胶囊/圆钮 Side 栏（对齐 QQ 音乐 / 京东展开态设计，与状态栏同轴对齐）
+          _buildDuoRightSideRail(
+            context,
+            metrics: metrics,
+            selectedIndex: selectedRailIndex,
+            onSelectIndex: (i) {
+              setState(() {
+                _splitRightMode = switch (i) {
+                  0 => 1, // 首页
+                  2 => 2, // 设置
+                  _ => 0, // 会话/对话
+                };
+              });
+            },
           ),
         ],
       ),
@@ -1698,32 +1694,31 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
               ),
             },
           ),
-          // 右侧 84pt 胶囊/圆钮 Side 栏（避开右上角状态岛）
-          Container(
+          // 右侧 84pt 胶囊/圆钮 Side 栏（避开右上角状态岛，并与状态栏中轴对齐）
+          SizedBox(
             width: metrics.rightStripWidth,
-            decoration: BoxDecoration(
-              border: Border(left: BorderSide(color: line, width: 0.6)),
-            ),
-            padding: EdgeInsets.only(
-              top: metrics.rightStripTopReserve,
-              bottom: bottomPad > 0 ? bottomPad + 10 : 16,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                DuoCircleButton(
-                  icon: DuoSvgIconKind.sidebar,
-                  primary: _portraitSessionPanelOpen,
-                  tooltip: L10n.t('展开/收起会话栏', 'Toggle session sidebar'),
-                  onTap: () => setState(
-                    () =>
-                        _portraitSessionPanelOpen = !_portraitSessionPanelOpen,
+            child: Padding(
+              padding: EdgeInsets.only(
+                top: metrics.rightStripTopReserve,
+                bottom: bottomPad > 0 ? bottomPad + 10 : 16,
+                right: metrics.rightRailHorizontalPadding.right,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  DuoCircleButton(
+                    icon: DuoSvgIconKind.sidebar,
+                    primary: _portraitSessionPanelOpen,
+                    tooltip: L10n.t('展开/收起会话栏', 'Toggle session sidebar'),
+                    onTap: () => setState(
+                      () => _portraitSessionPanelOpen =
+                          !_portraitSessionPanelOpen,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 10),
-                DuoPillPlatter(
-                  width: 52,
-                  child: Column(
+                  const SizedBox(height: 10),
+                  DuoPillPlatter(
+                    width: 46,
+                    child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       DuoNavPillButton(
@@ -1765,14 +1760,15 @@ class _RootScreenState extends State<RootScreen> with WidgetsBindingObserver {
                     },
                   ),
                 ),
-                const SizedBox(height: 10),
-                DuoCircleButton(
-                  icon: DuoSvgIconKind.plus,
-                  primary: true,
-                  tooltip: L10n.t('新建会话', 'New Session'),
-                  onTap: _openNewSession,
-                ),
-              ],
+                  const SizedBox(height: 10),
+                  DuoCircleButton(
+                    icon: DuoSvgIconKind.plus,
+                    primary: true,
+                    tooltip: L10n.t('新建会话', 'New Session'),
+                    onTap: _openNewSession,
+                  ),
+                ],
+              ),
             ),
           ),
         ],

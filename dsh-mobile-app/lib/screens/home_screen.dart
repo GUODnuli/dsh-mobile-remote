@@ -374,31 +374,32 @@ class _HomeScreenState extends State<HomeScreen>
               builder: (context, constraints) {
                 final duoMetrics = DuoAdaptiveScope.metricsOf(context);
                 // iPhone Duo 外屏（高度约 678pt，扣去顶栏后 < 640pt）自动启用紧凑 Hero，
-                // 让「最近会话」列表在首屏完整展现 4~5 条且不遮挡新建按钮。
+                // 并移除「最近会话」列表的 280pt 死高度限制，让卡片向下铺满整个剩余高度，
+                // 底部「＋ 新建会话」按钮与右侧栏底部「＋」按钮自然对齐，彻底消除底部留白。
                 final compactHero =
                     duoMetrics.isOuterOrShortScreen ||
                     constraints.maxHeight < 640;
+                final fullStretch = duoMetrics.hasRightSideRail;
                 final listMaxHeight = compactHero
                     ? math.max(
                         180.0,
-                        math.min(280.0, constraints.maxHeight - 220.0),
+                        constraints.maxHeight - (bigFish ? 236.0 : 176.0),
                       )
                     : (duoMetrics.isUnfoldedInner
                           ? math.max(
                               220.0,
-                              math.min(360.0, constraints.maxHeight - 310.0),
+                              constraints.maxHeight -
+                                  (bigFish ? 416.0 : 290.0),
                             )
                           : 176.0);
                 return SingleChildScrollView(
                   physics: const AlwaysScrollableScrollPhysics(),
-                  // 内容不满一屏时整体垂直居中（去掉底部输入框后主页不再空底）；
-                  // 外屏紧凑模式下贴顶对齐，避免上下留白挤占会话列表空间。
                   child: ConstrainedBox(
                     constraints: BoxConstraints(
                       minHeight: constraints.maxHeight,
                     ),
                     child: Align(
-                      alignment: compactHero
+                      alignment: (compactHero || fullStretch)
                           ? Alignment.topCenter
                           : (bigFish
                                 ? const Alignment(0, -0.35)
@@ -408,9 +409,9 @@ class _HomeScreenState extends State<HomeScreen>
                         child: Padding(
                           padding: EdgeInsets.fromLTRB(
                             16,
-                            compactHero ? 10 : 24,
-                            16,
                             compactHero ? 12 : 24,
+                            16,
+                            compactHero ? 16 : 24,
                           ),
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
@@ -536,10 +537,13 @@ class _HomeScreenState extends State<HomeScreen>
                                       else
                                         ConstrainedBox(
                                           constraints: BoxConstraints(
+                                            minHeight: fullStretch
+                                                ? listMaxHeight
+                                                : 0.0,
                                             maxHeight: listMaxHeight,
                                           ),
                                           child: ListView.separated(
-                                            shrinkWrap: true,
+                                            shrinkWrap: !fullStretch,
                                             padding: EdgeInsets.zero,
                                             itemCount: recent.length,
                                             separatorBuilder: (_, _) => Divider(

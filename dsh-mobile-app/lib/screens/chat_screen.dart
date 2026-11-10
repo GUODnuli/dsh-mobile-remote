@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart'
@@ -3382,14 +3383,28 @@ class _ChatScreenState extends State<ChatScreen> {
       final images = <Map<String, dynamic>>[];
       var total = 0;
       for (final f in _pendingImages) {
-        final b = await f.readAsBytes();
+        var b = await f.readAsBytes();
         if (!mounted) return;
         if (b.isEmpty) continue;
         // v3.0.0：按字节魔数嗅探真实类型（微信/浏览器保存的 WebP 常带 .jpg/.png 名字，
         // 扩展名声明与内核字节校验不符会报 "Declared image type does not match its bytes"）；
         // 嗅探失败再退回扩展名。服务端 /send 亦有同款纠正（双保险）。
         final real = _sniffMediaType(b);
-        final mediaType = real ?? _mediaTypeOf(f.name);
+        var mediaType = real ?? _mediaTypeOf(f.name);
+        var fileName = f.name;
+        // iOS 相册截图/照片可能是 HEIC/HEIF 或 16-bit 广色域格式（不在服务端 PNG/JPEG/WebP/GIF 白名单中）：
+        // 自动使用 Flutter 内置图像解码器转为标准 8-bit PNG，确保 iPhone 截图/照片 100% 可发送。
+        if (!mediaTypes.contains(mediaType)) {
+          final pngBytes = await _transcodeToPngIfPossible(b);
+          if (!mounted) return;
+          if (pngBytes != null && pngBytes.isNotEmpty) {
+            b = pngBytes;
+            mediaType = 'image/png';
+            if (fileName.isNotEmpty && !fileName.toLowerCase().endsWith('.png')) {
+              fileName = '$fileName.png';
+            }
+          }
+        }
         if (!mediaTypes.contains(mediaType)) {
           if (real != null) {
             showToast(
@@ -3434,7 +3449,7 @@ class _ChatScreenState extends State<ChatScreen> {
         images.add({
           'mediaType': mediaType,
           'data': base64Encode(b),
-          if (f.name.isNotEmpty) 'name': f.name,
+          if (fileName.isNotEmpty) 'name': fileName,
         });
       }
       if (images.isEmpty) {
@@ -3565,15 +3580,41 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  /// v3.0.0：当前模型是否支持图片（catalog.imageSupported；缺失时交服务端裁决）。
+  /// v3.0.0：当前模型是否支持图片（catalog.imageSupported；优先匹配 provider+model，缺失时交服务端裁决）。
   bool _currentModelSupportsImages() {
     final cat = widget.store.catalog;
     final cfg = widget.store.sessionConfig;
     if (cat == null || cfg.model == null) return true;
+    if (cfg.provider != null && cfg.provider!.isNotEmpty) {
+      for (final m in cat.models) {
+        if (m.provider == cfg.provider && m.id == cfg.model) {
+          return m.imageSupported;
+        }
+      }
+    }
+    for (final m in cat.models) {
+      if (m.id == cfg.model && m.imageSupported) return true;
+    }
     for (final m in cat.models) {
       if (m.id == cfg.model) return m.imageSupported;
     }
     return true;
+  }
+
+  /// 将 iOS HEIC/HEIF 等非标准网页格式图片在内存中解码并转为 PNG。
+  static Future<Uint8List?> _transcodeToPngIfPossible(Uint8List raw) async {
+    try {
+      final codec = await ui.instantiateImageCodec(raw);
+      final frame = await codec.getNextFrame();
+      final data = await frame.image.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+      frame.image.dispose();
+      codec.dispose();
+      return data?.buffer.asUint8List();
+    } catch (_) {
+      return null;
+    }
   }
 
   static String _mediaTypeOf(String name) {
@@ -4214,10 +4255,11 @@ class _ChatScreenState extends State<ChatScreen> {
                                   onTap: () => showPermSheet(context, store),
                                 ),
                               ),
-                              // 运行中且输入非空 → 「排队发送」胶囊（点击=普通发送，运行中自动排队）；
+                              // 运行中且输入非空（或有待发图片） → 「排队发送」胶囊（点击=普通发送，运行中自动排队）；
                               // 固定宽度（不参与收缩，始终完整显示）
                               if (_pageAgentStatus == 'running' &&
-                                  _inputCtrl.text.trim().isNotEmpty) ...[
+                                  (_inputCtrl.text.trim().isNotEmpty ||
+                                      _pendingImages.isNotEmpty)) ...[
                                 const SizedBox(width: 6),
                                 _Pill(
                                   label: L10n.t('排队发送', 'Queue send'),
@@ -4233,12 +4275,14 @@ class _ChatScreenState extends State<ChatScreen> {
                           _ContextRing(ratio: _contextRatio!),
                           const SizedBox(width: 8),
                         ],
-                        // v2.7.2：发送按钮恢复原设计——运行中=停止（对齐 PC 端），空闲=发送；
-                        // 长按=插队发送；运行中普通发送走「排队发送」胶囊——组外固定
+                        // 发送/停止按钮：空闲或已附加待发图片时点击=发送(↑)；运行中且无待发图片时点击=停止(■)、可点左侧「排队发送」胶囊
                         GestureDetector(
                           onTap: _sending
                               ? null
-                              : (_pageAgentStatus == 'running' ? _stop : _send),
+                              : ((_pageAgentStatus == 'running' &&
+                                        _pendingImages.isEmpty)
+                                    ? _stop
+                                    : _send),
                           onLongPress: _sending
                               ? null
                               : () => _send(null, 'steer'),
@@ -4249,7 +4293,8 @@ class _ChatScreenState extends State<ChatScreen> {
                               color: brand,
                               borderRadius: BorderRadius.circular(9),
                             ),
-                            child: _pageAgentStatus == 'running'
+                            child: (_pageAgentStatus == 'running' &&
+                                    _pendingImages.isEmpty)
                                 ? Center(
                                     child: Container(
                                       width: 10,
@@ -4348,69 +4393,64 @@ class _ChatScreenState extends State<ChatScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Expanded(child: conversationBody),
-            Container(
+            SizedBox(
               width: duoMetrics.rightStripWidth,
-              decoration: BoxDecoration(
-                border: Border(
-                  left: BorderSide(
-                    color: DshColors.line(context),
-                    width: 0.6,
-                  ),
+              child: Padding(
+                padding: EdgeInsets.only(
+                  top: duoMetrics.rightStripTopReserve,
+                  bottom: bottomPad > 0 ? bottomPad + 10 : 16,
+                  right: duoMetrics.rightRailHorizontalPadding.right,
                 ),
-              ),
-              padding: EdgeInsets.only(
-                top: duoMetrics.rightStripTopReserve,
-                bottom: bottomPad > 0 ? bottomPad + 10 : 16,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  DuoCircleButton(
-                    icon: DuoSvgIconKind.arrowLeft,
-                    tooltip: L10n.t('返回', 'Back'),
-                    onTap: () => Navigator.of(context).pop(),
-                  ),
-                  const SizedBox(height: 8),
-                  DuoCircleButton(
-                    icon: DuoSvgIconKind.moreHorizontal,
-                    size: 40,
-                    tooltip: L10n.t('对话操作', 'Conversation actions'),
-                    onTap: _openConversationActionRail,
-                  ),
-                  const SizedBox(height: 10),
-                  Expanded(
-                    child: (!_inHistory && showTurnRail)
-                        ? Center(
-                            child: DuoPillPlatter(
-                              width: 44,
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 8,
-                                horizontal: 6,
-                              ),
-                              child: TurnNavigatorRail(
-                                anchors: turnAnchors,
-                                unloadedTurns: unloadedTurns,
-                                activeTurn: _activeTurn,
-                                busyTurn: _busyTurn,
-                                width: 32,
-                                centerTicks: true,
-                                verticalMargin: 16,
-                                onNavigate: (anchor) =>
-                                    unawaited(_navigateToTurn(anchor)),
-                              ),
-                            ),
-                          )
-                        : const SizedBox.shrink(),
-                  ),
-                  const SizedBox(height: 10),
-                  if (!_inHistory)
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
                     DuoCircleButton(
-                      icon: DuoSvgIconKind.arrowDown,
-                      primary: _showJumpToLatest,
-                      tooltip: L10n.t('回到底部', 'Jump to bottom'),
-                      onTap: _jumpToLatest,
+                      icon: DuoSvgIconKind.arrowLeft,
+                      tooltip: L10n.t('返回', 'Back'),
+                      onTap: () => Navigator.of(context).pop(),
                     ),
-                ],
+                    const SizedBox(height: 8),
+                    DuoCircleButton(
+                      icon: DuoSvgIconKind.moreHorizontal,
+                      size: 40,
+                      tooltip: L10n.t('对话操作', 'Conversation actions'),
+                      onTap: _openConversationActionRail,
+                    ),
+                    const SizedBox(height: 10),
+                    Expanded(
+                      child: (!_inHistory && showTurnRail)
+                          ? Center(
+                              child: DuoPillPlatter(
+                                width: 44,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 8,
+                                  horizontal: 6,
+                                ),
+                                child: TurnNavigatorRail(
+                                  anchors: turnAnchors,
+                                  unloadedTurns: unloadedTurns,
+                                  activeTurn: _activeTurn,
+                                  busyTurn: _busyTurn,
+                                  width: 32,
+                                  centerTicks: true,
+                                  verticalMargin: 16,
+                                  onNavigate: (anchor) =>
+                                      unawaited(_navigateToTurn(anchor)),
+                                ),
+                              ),
+                            )
+                          : const SizedBox.shrink(),
+                    ),
+                    const SizedBox(height: 10),
+                    if (!_inHistory)
+                      DuoCircleButton(
+                        icon: DuoSvgIconKind.arrowDown,
+                        primary: _showJumpToLatest,
+                        tooltip: L10n.t('回到底部', 'Jump to bottom'),
+                        onTap: _jumpToLatest,
+                      ),
+                  ],
+                ),
               ),
             ),
           ],
