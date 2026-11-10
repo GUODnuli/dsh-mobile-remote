@@ -3915,142 +3915,143 @@ class _ChatScreenState extends State<ChatScreen> {
     // 条目增删/分页会改变几何：本帧结束后校准"当前轮"。
     // 只在取值变化时 setState，因此会收敛，不会自激。
     WidgetsBinding.instance.addPostFrameCallback((_) => _updateActiveTurn());
-    final duoMetrics = DuoAdaptiveScope.metricsOf(context);
-    final topRightClearance = duoMetrics.isUnfoldedInner
+    final rawMq = MediaQuery.of(context);
+    final duoMetrics = DuoAdaptiveScope.maybeOf(context)?.metrics ??
+        DuoLayoutMetrics.fromMediaQuery(rawMq);
+    final useDuoChatRightRail = !widget.embedded && duoMetrics.hasRightSideRail;
+    final topRightClearance =
+        (!useDuoChatRightRail && duoMetrics.isUnfoldedInner)
         ? duoMetrics.topRightCornerBlock.width
         : 0.0;
 
-    return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      appBar: AppBar(
-        automaticallyImplyLeading: !widget.embedded,
-        leading: widget.embedded
-            ? widget.leading
-            : IconButton(
-                icon: const Icon(Icons.arrow_back, size: 20),
-                onPressed: () => Navigator.of(context).pop(),
-              ),
-        title: Row(
-          children: [
-            Flexible(
-              child: Text(
-                _title ?? L10n.t('会话', 'Session'),
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
+    final Widget conversationBody = Column(
+      children: [
+        // iPhone Duo 外屏独立会话页顶部标题条（限制在左侧主内容带内，不侵入右侧 84pt side 栏）
+        if (useDuoChatRightRail)
+          SafeArea(
+            bottom: false,
+            right: false,
+            child: Container(
+              height: 44,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(
+                    color: DshColors.line(context),
+                    width: 0.6,
+                  ),
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
               ),
-            ),
-            const SizedBox(width: 8),
-            _StatusDot(
-              status: store.connState == 'connected'
-                  ? _pageAgentStatus
-                  : 'offline',
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.more_vert, size: 20),
-            tooltip: L10n.t('对话操作', 'Conversation actions'),
-            onPressed: _openConversationActionRail,
-          ),
-          if (topRightClearance > 0) SizedBox(width: topRightClearance),
-        ],
-      ),
-      body: Column(
-        children: [
-          // 用量条
-          if (_usageLoaded && _usage.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 2, 16, 2),
-              child: Text(
-                _fmtUsage(_usage),
-                style: TextStyle(fontSize: 11.5, color: ink3),
-              ),
-            ),
-          // v2.8.0：后台任务卡片移到对话框顶部（不再与问询/审批卡堆在底部），可收纳、默认收起
-          if (!_inHistory && widget.store.hasRunningJobs(_mySessionId ?? ''))
-            _JobCard(
-              jobs: widget.store.jobsOf(_mySessionId ?? ''),
-              onOpen: _openTools,
-              onKill: _killJob,
-            ),
-          // v3.1.5：休眠会话降级常驻提示——历史只含 current surface / 配置已回退默认
-          if (_historyDegraded || _configDegraded)
-            Container(
-              width: double.infinity,
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Row(
                 children: [
-                  if (_historyDegraded)
-                    Text(
-                      L10n.t(
-                        '当前仅能恢复部分历史，更早内容可能不可用',
-                        'Only partial history available',
+                  Flexible(
+                    child: Text(
+                      _title ?? L10n.t('会话', 'Session'),
+                      style: const TextStyle(
+                        fontSize: 15.5,
+                        fontWeight: FontWeight.w600,
                       ),
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                  if (_configDegraded)
-                    Text(
-                      L10n.t(
-                        '该会话配置已回退默认（模型/权限/预设）',
-                        'Session settings reverted to defaults (model/permissions)',
-                      ),
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _StatusDot(
+                    status: store.connState == 'connected'
+                        ? _pageAgentStatus
+                        : 'offline',
+                  ),
                 ],
               ),
             ),
-          // 消息流：live 视图（普通列表，最新在底部）或历史分段浏览；
-          // 上翻时右下角浮出"回到底部"圆钮（位于输入框正上方，不在消息流内）
-          Expanded(
-            child: Stack(
+          ),
+        // 用量条
+        if (_usageLoaded && _usage.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 2, 16, 2),
+            child: Text(
+              _fmtUsage(_usage),
+              style: TextStyle(fontSize: 11.5, color: ink3),
+            ),
+          ),
+        // v2.8.0：后台任务卡片移到对话框顶部（不再与问询/审批卡堆在底部），可收纳、默认收起
+        if (!_inHistory && widget.store.hasRunningJobs(_mySessionId ?? ''))
+          _JobCard(
+            jobs: widget.store.jobsOf(_mySessionId ?? ''),
+            onOpen: _openTools,
+            onKill: _killJob,
+          ),
+        // v3.1.5：休眠会话降级常驻提示——历史只含 current surface / 配置已回退默认
+        if (_historyDegraded || _configDegraded)
+          Container(
+            width: double.infinity,
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Positioned.fill(
-                  child: _inHistory ? _buildHistoryView() : _buildLiveView(),
-                ),
-                // issue #24：轮次导航刻度轨。放在消息流之上、右下角圆钮之下；
-                // 只占右侧约 28px，空白区域不吸收命中，消息流照常滚动。
-                if (!_inHistory && showTurnRail)
-                  Positioned.fill(
-                    child: Align(
-                      alignment: Alignment.centerRight,
-                      child: Padding(
-                        padding: const EdgeInsets.only(right: 12),
-                        child: TurnNavigatorRail(
-                          anchors: turnAnchors,
-                          unloadedTurns: unloadedTurns,
-                          activeTurn: _activeTurn,
-                          busyTurn: _busyTurn,
-                          onNavigate: (anchor) =>
-                              unawaited(_navigateToTurn(anchor)),
-                        ),
-                      ),
+                if (_historyDegraded)
+                  Text(
+                    L10n.t(
+                      '当前仅能恢复部分历史，更早内容可能不可用',
+                      'Only partial history available',
+                    ),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
-                if (!_inHistory)
-                  Positioned(
-                    bottom: 12,
-                    right: 14,
-                    child: _JumpToLatestButton(
-                      visible: _showJumpToLatest,
-                      onTap: _jumpToLatest,
+                if (_configDegraded)
+                  Text(
+                    L10n.t(
+                      '该会话配置已回退默认（模型/权限/预设）',
+                      'Session settings reverted to defaults (model/permissions)',
+                    ),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
               ],
             ),
           ),
+        // 消息流：live 视图（普通列表，最新在底部）或历史分段浏览；
+        // 在 iPhone Duo 外屏下，轮次导航书签与跳到底部按钮均移入右侧 84pt 专属 side 栏中。
+        Expanded(
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: _inHistory ? _buildHistoryView() : _buildLiveView(),
+              ),
+              if (!_inHistory && showTurnRail && !useDuoChatRightRail)
+                Positioned.fill(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: TurnNavigatorRail(
+                        anchors: turnAnchors,
+                        unloadedTurns: unloadedTurns,
+                        activeTurn: _activeTurn,
+                        busyTurn: _busyTurn,
+                        onNavigate: (anchor) =>
+                            unawaited(_navigateToTurn(anchor)),
+                      ),
+                    ),
+                  ),
+                ),
+              if (!_inHistory && !useDuoChatRightRail)
+                Positioned(
+                  bottom: 12,
+                  right: 14,
+                  child: _JumpToLatestButton(
+                    visible: _showJumpToLatest,
+                    onTap: _jumpToLatest,
+                  ),
+                ),
+            ],
+          ),
+        ),
           // 活动条：思考中 / 工具执行中（过程反馈，不依赖任何开关）
           if (!_inHistory && (_reasoning.isNotEmpty || _activeTools.isNotEmpty))
             _ActivityBar(
@@ -4285,8 +4286,137 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       ),
     ],
-  ),
-);
+  );
+
+    if (!useDuoChatRightRail) {
+      return Scaffold(
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        appBar: AppBar(
+          automaticallyImplyLeading: !widget.embedded,
+          leading: widget.embedded
+              ? widget.leading
+              : IconButton(
+                  icon: const Icon(Icons.arrow_back, size: 20),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+          title: Row(
+            children: [
+              Flexible(
+                child: Text(
+                  _title ?? L10n.t('会话', 'Session'),
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              _StatusDot(
+                status: store.connState == 'connected'
+                    ? _pageAgentStatus
+                    : 'offline',
+              ),
+            ],
+          ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.more_vert, size: 20),
+              tooltip: L10n.t('对话操作', 'Conversation actions'),
+              onPressed: _openConversationActionRail,
+            ),
+            if (topRightClearance > 0) SizedBox(width: topRightClearance),
+          ],
+        ),
+        body: conversationBody,
+      );
+    }
+
+    // iPhone Duo 外屏会话页专属双列结构：
+    // - 左列（Expanded，宽度与底部输入框完全一致 = 382pt）：顶部会话标题 + 消息流 + 底部输入框，绝不侵入右侧 side 栏；
+    // - 右列（84pt side 栏，避开右上角 84×170 状态块）：
+    //   1) 顶部向左返回圆形按钮 (←) + 更多操作圆形按钮 (⋯)
+    //   2) 中部椭圆形胶囊包裹的 DSH 每轮对话书签轨 (TurnNavigatorRail)，居中摆放不再贴右边缘
+    //   3) 底部直达底部的向下圆形按钮 (↓)
+    final bottomPad = rawMq.padding.bottom;
+    return MediaQuery(
+      data: duoMetrics.normalizeMediaQuery(rawMq),
+      child: Scaffold(
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        body: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(child: conversationBody),
+            Container(
+              width: duoMetrics.rightStripWidth,
+              decoration: BoxDecoration(
+                border: Border(
+                  left: BorderSide(
+                    color: DshColors.line(context),
+                    width: 0.6,
+                  ),
+                ),
+              ),
+              padding: EdgeInsets.only(
+                top: duoMetrics.rightStripTopReserve,
+                bottom: bottomPad > 0 ? bottomPad + 10 : 16,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  DuoCircleButton(
+                    icon: DuoSvgIconKind.arrowLeft,
+                    tooltip: L10n.t('返回', 'Back'),
+                    onTap: () => Navigator.of(context).pop(),
+                  ),
+                  const SizedBox(height: 8),
+                  DuoCircleButton(
+                    icon: DuoSvgIconKind.moreHorizontal,
+                    size: 40,
+                    tooltip: L10n.t('对话操作', 'Conversation actions'),
+                    onTap: _openConversationActionRail,
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: (!_inHistory && showTurnRail)
+                        ? Center(
+                            child: DuoPillPlatter(
+                              width: 44,
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 8,
+                                horizontal: 6,
+                              ),
+                              child: TurnNavigatorRail(
+                                anchors: turnAnchors,
+                                unloadedTurns: unloadedTurns,
+                                activeTurn: _activeTurn,
+                                busyTurn: _busyTurn,
+                                width: 32,
+                                centerTicks: true,
+                                verticalMargin: 16,
+                                onNavigate: (anchor) =>
+                                    unawaited(_navigateToTurn(anchor)),
+                              ),
+                            ),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                  const SizedBox(height: 10),
+                  if (!_inHistory)
+                    DuoCircleButton(
+                      icon: DuoSvgIconKind.arrowDown,
+                      primary: _showJumpToLatest,
+                      tooltip: L10n.t('回到底部', 'Jump to bottom'),
+                      onTap: _jumpToLatest,
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   String _fmtUsage(Map<String, dynamic> u) {

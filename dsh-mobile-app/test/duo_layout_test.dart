@@ -36,7 +36,7 @@ void main() {
       expect(norm.viewPadding.right, 0);
     });
 
-    test('iPhone Duo 展开内屏横屏 (951×669, right=84) 启用左右主从双栏并铺满全屏', () {
+    test('iPhone Duo 展开内屏横屏 (951×669, right=84) 启用左右主从双栏并保留右侧 84pt side 栏', () {
       const mq = MediaQueryData(
         size: Size(951, 669),
         padding: EdgeInsets.only(bottom: 34, right: 84),
@@ -45,12 +45,14 @@ void main() {
       final m = DuoLayoutMetrics.fromMediaQuery(mq);
       expect(m.posture, DuoPosture.duoInnerLandscape);
       expect(m.isSplitMasterDetail, isTrue);
+      expect(m.hasRightSideRail, isTrue);
+      expect(m.rightStripWidth, 84);
       expect(m.topRightCornerBlock, const Size(84, 120));
       final norm = m.normalizeMediaQuery(mq);
       expect(norm.padding.right, 0);
     });
 
-    test('iPhone Duo 展开内屏竖屏 (669×951, top=82) 启用 iPad mini Chatbot 竖屏模式', () {
+    test('iPhone Duo 展开内屏竖屏 (669×951, top=82) 启用右侧 84pt side 栏', () {
       const mq = MediaQueryData(
         size: Size(669, 951),
         padding: EdgeInsets.only(top: 82, bottom: 34),
@@ -58,6 +60,8 @@ void main() {
       final m = DuoLayoutMetrics.fromMediaQuery(mq);
       expect(m.posture, DuoPosture.duoInnerPortrait);
       expect(m.isTabletPortrait, isTrue);
+      expect(m.hasRightSideRail, isTrue);
+      expect(m.rightStripWidth, 84);
       expect(m.topRightCornerBlock, const Size(134, 82));
     });
   });

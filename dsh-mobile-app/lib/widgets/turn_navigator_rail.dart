@@ -70,6 +70,8 @@ class TurnNavigatorRail extends StatefulWidget {
     this.unloadedTurns = const <int>{},
     this.width = 28,
     this.maxHeight = 420,
+    this.centerTicks = false,
+    this.verticalMargin = 64,
   });
 
   /// 全部刻度（已加载轮次 + 宿主大纲的并集，按轮次号升序）。
@@ -92,6 +94,8 @@ class TurnNavigatorRail extends StatefulWidget {
 
   final double width;
   final double maxHeight;
+  final bool centerTicks;
+  final double verticalMargin;
 
   @override
   State<TurnNavigatorRail> createState() => _TurnNavigatorRailState();
@@ -304,10 +308,10 @@ class _TurnNavigatorRailState extends State<TurnNavigatorRail>
         final available = constraints.maxHeight.isFinite
             ? constraints.maxHeight
             : widget.maxHeight;
-        // 与电脑端同构：留出 64px 余量，并设上限，避免在长会话里铺满全屏。
+        // 与电脑端同构：留出 verticalMargin 余量，并设上限，避免在长会话里铺满全屏。
         final frameHeight = math.min(
           widget.maxHeight,
-          math.max(0.0, available - 64),
+          math.max(0.0, available - widget.verticalMargin),
         );
         if (frameHeight < _kTickPitch * 2) return const SizedBox.shrink();
         if (_lastFrameHeight != frameHeight) {
@@ -385,7 +389,9 @@ class _TurnNavigatorRailState extends State<TurnNavigatorRail>
                 key: ValueKey<String>('turn-tick-${anchor.turn}'),
                 height: _kTickPitch,
                 child: Align(
-                  alignment: Alignment.centerRight,
+                  alignment: widget.centerTicks
+                      ? Alignment.center
+                      : Alignment.centerRight,
                   child: _TickBar(
                     active: anchor.turn == widget.activeTurn,
                     busy: anchor.turn == widget.busyTurn,

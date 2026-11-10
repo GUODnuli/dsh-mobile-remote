@@ -33,6 +33,21 @@ import UniformTypeIdentifiers
     let handledByFlutter = super.application(app, open: url, options: options)
     return handledByUs || handledByFlutter
   }
+
+  /// iPhone Duo 折叠外屏（短边 < 560pt，即 466×678）锁定竖屏不自动旋转（对齐 QQ 音乐外屏体验）；
+  /// 展开内屏（短边 >= 560pt，即 669×951 / 951×669）支持横竖屏自由旋转。
+  override func application(
+    _ application: UIApplication,
+    supportedInterfaceOrientationsFor window: UIWindow?
+  ) -> UIInterfaceOrientationMask {
+    if let screenBounds = window?.windowScene?.screen.bounds ?? window?.bounds {
+      let shortest = min(screenBounds.width, screenBounds.height)
+      if shortest >= 560 {
+        return .all
+      }
+    }
+    return .portrait
+  }
 }
 
 /// 原生桥：dsh/files、dsh/update 两个 MethodChannel，以及外部文档打开（pendingDoc）机制。
